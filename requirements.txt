@@ -1,5 +1,6 @@
 streamlit
 pandas
+python-docx
 pillow
 pytesseract
 opencv-python-headless
