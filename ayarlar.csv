@@ -1,6 +1,5 @@
-Ayar,Deger
-dolar_kuru,42.51
-kar_orani,25.0
-kdv_durum,Evet
-lazer_dk,25.0
-abkant_vurus,15.0
+Key,Val
+kar,25.0
+kdv,20.0
+lazer_dk,30.0
+abkant,15.0
