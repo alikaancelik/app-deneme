@@ -14,18 +14,11 @@ from datetime import datetime
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="ÖZÇELİK ENDÜSTRİ", layout="wide", page_icon="🏭")
 
-# --- CSS (GÖRÜNÜM) ---
+# --- CSS ---
 st.markdown("""
     <style>
     .main-header {font-size: 28px; font-weight: bold; color: #0f172a;}
-    .metric-card {
-        background-color: #ffffff !important; 
-        padding: 15px; 
-        border-radius: 8px; 
-        border: 1px solid #ccc; 
-        text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
+    .metric-card {background-color: #ffffff !important; padding: 15px; border-radius: 8px; border: 1px solid #ccc; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);}
     .metric-label {font-size: 16px; color: #000000 !important; font-weight: 500;}
     .metric-val {font-size: 26px; font-weight: bold; color: #000000 !important;}
     .stButton>button {width: 100%; border-radius: 5px;}
@@ -45,17 +38,10 @@ def read_csv_from_github(filename):
         contents = repo.get_contents(filename)
         return pd.read_csv(io.StringIO(contents.decoded_content.decode()))
     except:
-        # Dosya yoksa boş şablon döndür
         if filename == "musteriler.csv": return pd.DataFrame(columns=["Firma Adı", "Yetkili", "Telefon", "Adres"])
         elif filename == "siparisler.csv": return pd.DataFrame(columns=["Tarih", "Müşteri", "İş Adı", "Tutar", "Detay"])
         elif filename == "ayarlar.csv":
-            return pd.DataFrame([
-                {"Ayar": "dolar_kuru", "Deger": 34.50},
-                {"Ayar": "kar_orani", "Deger": 25.0},
-                {"Ayar": "kdv_durum", "Deger": "Evet"},
-                {"Ayar": "lazer_dk", "Deger": 25.0},
-                {"Ayar": "abkant_vurus", "Deger": 15.0}
-            ])
+            return pd.DataFrame([{"Ayar": "dolar_kuru", "Deger": 34.50}, {"Ayar": "kar_orani", "Deger": 25.0}, {"Ayar": "kdv_durum", "Deger": "Evet"}, {"Ayar": "lazer_dk", "Deger": 25.0}, {"Ayar": "abkant_vurus", "Deger": 15.0}])
         elif filename == "malzemeler.csv":
             return pd.DataFrame([{"Malzeme": "Siyah Sac", "Fiyat": 0.85, "Birim": "USD", "Yogunluk": 7.85}])
         return pd.DataFrame()
@@ -86,19 +72,15 @@ def cypcut_analiz(image):
         else: img_gray = img_np
         _, img_thresh = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY)
         text = pytesseract.image_to_string(Image.fromarray(img_thresh))
-        
         zaman = re.search(r'(?:Kesim|Cut|Time).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE)
         if zaman: veriler["sure"] = sure_cevir(zaman.group(1))
-        
         x = re.search(r'X\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         y = re.search(r'Y\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         if x: veriler["x"] = float(x.group(1).replace(',', '.'))
         if y: veriler["y"] = float(y.group(1).replace(',', '.'))
-        
         kal = re.search(r'x\s*(\d+[.,]?\d*)\s*$', text, re.MULTILINE)
         if not kal: kal = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
         if kal: veriler["kal"] = float(kal.group(1).replace(',', '.'))
-        
         tl = text.lower()
         if "hardox" in tl: veriler["malz"] = "Hardox 450"
         elif "paslanmaz" in tl: veriler["malz"] = "Paslanmaz"
@@ -149,29 +131,35 @@ with st.sidebar:
 if menu == "Hesaplama & Teklif":
     st.markdown('<p class="main-header">Teklif Masası</p>', unsafe_allow_html=True)
     
-    # 1. MÜŞTERİ SEÇİMİ
+    # GÜNCEL MÜŞTERİ LİSTESİNİ ÇEK (Her seferinde taze veri)
     df_mus = read_csv_from_github("musteriler.csv")
     mus_listesi = ["Seçiniz..."]
     if not df_mus.empty:
         mus_listesi += df_mus["Firma Adı"].tolist()
     
     secenekler = ["⚡ HIZLI İŞLEM (Kayitsiz)"] + mus_listesi
-    yeni_secim = st.selectbox("Müşteri Seçin:", secenekler)
     
-    # Müşteri değişince sepeti temizle
+    # Selectbox'a index vererek hafızadan gelmesini sağla
+    try:
+        secim_index = secenekler.index(st.session_state.secili_musteri_hafiza)
+    except:
+        secim_index = 0
+        
+    yeni_secim = st.selectbox("Müşteri Seçin:", secenekler, index=secim_index)
+    
+    # Seçimi hafızaya kaydet
     if yeni_secim != st.session_state.secili_musteri_hafiza:
-        st.session_state.sepet = [] 
-        st.session_state.secili_musteri_hafiza = yeni_secim 
-        st.toast("Müşteri değişti, sepet temizlendi.", icon="🧹")
+        st.session_state.secili_musteri_hafiza = yeni_secim
+        st.session_state.sepet = [] # Müşteri değişince sepeti sil
+        st.rerun() # Sayfayı yenile ki her şey otursun
 
-    # Müşteri Adı Belirleme ve Input
     aktif_musteri_adi = ""
-    temp_ad_input = ""
+    temp_ad_input = "" # Hızlı işlem adı
     
     if yeni_secim == "⚡ HIZLI İŞLEM (Kayitsiz)":
         c1, c2 = st.columns([1, 2])
         c1.info("Kayıtsız İşlem Modu")
-        temp_ad_input = c2.text_input("Müşteri / İş İsmi (Boş bırakırsan 'İsimsiz İş X' olur):", placeholder="Örn: Ahmet Bey")
+        temp_ad_input = c2.text_input("Geçici Müşteri / İş İsmi:", placeholder="Örn: Ahmet Bey")
     elif yeni_secim == "Seçiniz...":
         st.warning("Lütfen işlem yapmak için bir müşteri seçin.")
         st.stop()
@@ -294,7 +282,7 @@ if menu == "Hesaplama & Teklif":
                 
                 st.divider()
                 
-                # --- KAYDETME VE TEMİZLEME ALANI ---
+                # --- KAYDETME VE TEMİZLEME ---
                 col_kaydet, col_temizle = st.columns([2, 1])
                 
                 notlar = st.text_input("Sipariş Notu (Opsiyonel):", placeholder="Örn: Haftaya teslim")
@@ -308,7 +296,7 @@ if menu == "Hesaplama & Teklif":
                             if temp_ad_input:
                                 final_musteri_adi = temp_ad_input
                             else:
-                                # İSİMSİZ İŞ 1, 2, 3 MANTIĞI
+                                # İsimsiz İş 1, 2, 3...
                                 df_sip = read_csv_from_github("siparisler.csv")
                                 if not df_sip.empty:
                                     isimsiz_sayisi = len(df_sip[df_sip["Müşteri"].astype(str).str.startswith("İsimsiz İş")])
@@ -336,9 +324,9 @@ if menu == "Hesaplama & Teklif":
                         st.rerun()
 
                 with col_temizle:
-                    # Hepsini sil ve başa dön
-                    if st.button("🗑️ TEMİZLE (İPTAL)", type="secondary", use_container_width=True):
+                    if st.button("🗑️ TEMİZLE / SIFIRLA", type="secondary", use_container_width=True):
                         st.session_state.sepet = []
+                        st.session_state.secili_musteri_hafiza = "Seçiniz..."
                         st.rerun()
 
     else: st.info("Sepet boş.")
@@ -349,11 +337,10 @@ elif menu == "Müşteri Yönetimi":
     tab1, tab2 = st.tabs(["📋 Müşteri Geçmişi", "➕ Yeni Firma Ekle"])
     
     with tab1:
-        # Verileri oku
         df_mus = read_csv_from_github("musteriler.csv")
         df_sip = read_csv_from_github("siparisler.csv")
         
-        # Benzersiz müşteri listesi (Hem kayıtlı hem sipariş geçmişi olanlar)
+        # Müşterileri birleştir (Kayıtlılar + Hızlı işlem yapanlar)
         tum_musteriler = set()
         if not df_mus.empty: tum_musteriler.update(df_mus["Firma Adı"].dropna().tolist())
         if not df_sip.empty: tum_musteriler.update(df_sip["Müşteri"].dropna().tolist())
@@ -363,19 +350,16 @@ elif menu == "Müşteri Yönetimi":
         secilen_m = st.selectbox("Geçmişini Görmek İstediğin Müşteriyi Seç:", ["Seçiniz..."] + sorted_musteriler)
         
         if secilen_m != "Seçiniz...":
-            # 1. Müşteri Bilgileri
             st.markdown("---")
             st.markdown(f"### 👤 {secilen_m}")
             
+            # Müşteri Bilgisi (Varsa)
             bilgi = df_mus[df_mus["Firma Adı"] == secilen_m]
             if not bilgi.empty:
                 b = bilgi.iloc[0]
                 st.info(f"**Yetkili:** {b.get('Yetkili','-')} | **Tel:** {b.get('Telefon','-')} | **Adres:** {b.get('Adres','-')}")
-            else:
-                st.warning("Bu isimde kayıtlı firma kartı yok (Sadece hızlı işlem yapılmış).")
             
-            # 2. Sipariş Geçmişi
-            st.markdown("#### 📜 Sipariş Geçmişi")
+            # Sipariş Geçmişi
             if not df_sip.empty:
                 siparisler = df_sip[df_sip["Müşteri"] == secilen_m]
                 if not siparisler.empty:
