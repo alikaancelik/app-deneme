@@ -10,7 +10,7 @@ import numpy as np
 from datetime import datetime
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Lazer CRM & Teklif", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="Lazer CRM & Metalix", layout="wide", page_icon="🏭")
 
 # --- DATABASE & AYARLAR ---
 DEFAULT_MALZEME = {
@@ -23,33 +23,30 @@ DEFAULT_MALZEME = {
     "ST37": {"fiyat": 0.85, "birim": "USD", "yogunluk": 7.85},
 }
 
-# Session State
+# Session State Başlatma
 if 'sepet' not in st.session_state: st.session_state.sepet = []
 if 'malzeme_db' not in st.session_state: st.session_state.malzeme_db = DEFAULT_MALZEME
 if 'dolar_kuru' not in st.session_state: st.session_state.dolar_kuru = 34.50
 if 'lazer_dk_ucret' not in st.session_state: st.session_state.lazer_dk_ucret = 20.0
-# Form verileri
-if 'form_x' not in st.session_state: st.session_state.form_x = 0.0
-if 'form_y' not in st.session_state: st.session_state.form_y = 0.0
-if 'form_sure' not in st.session_state: st.session_state.form_sure = 0.0
-if 'form_kal' not in st.session_state: st.session_state.form_kal = 2.0
-if 'form_fire' not in st.session_state: st.session_state.form_fire = 0.0
-if 'form_malz' not in st.session_state: st.session_state.form_malz = "S235JR (Siyah)"
+
+# Form verileri (Geçici Hafıza)
+defaults = {"x": 0.0, "y": 0.0, "sure": 0.0, "kal": 2.0, "fire": 0.0, "malz": "S235JR (Siyah)"}
+for key, val in defaults.items():
+    if f'form_{key}' not in st.session_state: st.session_state[f'form_{key}'] = val
 
 # --- YARDIMCI FONKSİYONLAR ---
 
 def musteri_listesi_getir():
-    """CSV'den benzersiz müşteri isimlerini çeker"""
     if os.path.exists("musteri_gecmisi.csv"):
-        df = pd.read_csv("musteri_gecmisi.csv")
-        # Benzersiz isimleri al ve sırala
-        isimler = df["Müşteri"].unique().tolist()
-        isimler.sort()
-        return isimler
+        try:
+            df = pd.read_csv("musteri_gecmisi.csv")
+            isimler = df["Müşteri"].dropna().unique().tolist()
+            isimler.sort()
+            return isimler
+        except: return []
     return []
 
 def kayit_ekle(musteri, is_adi, tutar, detay):
-    """Müşteriye iş kaydeder"""
     yeni_kayit = {
         "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "Müşteri": musteri,
@@ -58,10 +55,9 @@ def kayit_ekle(musteri, is_adi, tutar, detay):
         "Detay": detay
     }
     df = pd.DataFrame([yeni_kayit])
-    if os.path.exists("musteri_gecmisi.csv"):
-        df.to_csv("musteri_gecmisi.csv", mode='a', header=False, index=False)
-    else:
-        df.to_csv("musteri_gecmisi.csv", index=False)
+    mode = 'a' if os.path.exists("musteri_gecmisi.csv") else 'w'
+    header = not os.path.exists("musteri_gecmisi.csv")
+    df.to_csv("musteri_gecmisi.csv", mode=mode, header=header, index=False)
 
 def sureyi_dakikaya_cevir(zaman_str):
     try:
@@ -71,144 +67,178 @@ def sureyi_dakikaya_cevir(zaman_str):
         return 0.0
     except: return 0.0
 
-def analiz_motoru(kaynak, text):
+# --- ANALİZ MOTORLARI ---
+
+def regex_taramasi(text):
     veriler = {}
-    # Süre
     zaman = re.search(r'(?:Kesim|Cut|Time).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE | re.DOTALL)
     if zaman: veriler["sure"] = sureyi_dakikaya_cevir(zaman.group(1))
     
-    # X - Y
     x_match = re.search(r'X\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
     y_match = re.search(r'Y\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
     if x_match: veriler["x"] = float(x_match.group(1).replace(',', '.'))
     if y_match: veriler["y"] = float(y_match.group(1).replace(',', '.'))
     
-    # Kalınlık
     kal = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
-    if kal: veriler["kalinlik"] = float(kal.group(1).replace(',', '.'))
+    if kal: veriler["kal"] = float(kal.group(1).replace(',', '.'))
     
-    # Malzeme
     tl = text.lower()
-    if "dkp" in tl: veriler["malzeme"] = "DKP"
-    elif "galvaniz" in tl: veriler["malzeme"] = "Galvaniz"
-    elif "paslanmaz" in tl or "304" in tl: veriler["malzeme"] = "Paslanmaz 304"
-    elif "alu" in tl: veriler["malzeme"] = "Alüminyum"
-    else: veriler["malzeme"] = "S235JR (Siyah)"
-    
+    if "dkp" in tl: veriler["malz"] = "DKP"
+    elif "galvaniz" in tl: veriler["malz"] = "Galvaniz"
+    elif "paslanmaz" in tl: veriler["malz"] = "Paslanmaz 304"
+    elif "alu" in tl: veriler["malz"] = "Alüminyum"
+    else: veriler["malz"] = "S235JR (Siyah)"
     return veriler
 
+def excel_analiz(file):
+    """Metalix veya CypCut Excel Raporlarını Okur"""
+    try:
+        df = pd.read_excel(file)
+        # Sütun isimlerini küçük harfe çevirip arama yapalım
+        df.columns = [str(col).lower() for col in df.columns]
+        
+        veriler = {}
+        # Metalix/Cypcut sütun tahminleri (Header keywords)
+        for col in df.columns:
+            if "time" in col or "süre" in col or "cut" in col:
+                # İlk satırdaki süreyi al (Genelde toplam süre ilk satırdadır veya toplamdadır)
+                val = str(df[col].iloc[0])
+                veriler["sure"] = sureyi_dakikaya_cevir(val)
+            if "mat" in col or "malz" in col:
+                val = str(df[col].iloc[0]).lower()
+                if "dkp" in val: veriler["malz"] = "DKP"
+                elif "galv" in val: veriler["malz"] = "Galvaniz"
+                elif "pas" in val or "inox" in val: veriler["malz"] = "Paslanmaz 304"
+                elif "alu" in val: veriler["malz"] = "Alüminyum"
+            if "thic" in col or "kal" in col:
+                try: veriler["kal"] = float(str(df[col].iloc[0]).replace(',', '.'))
+                except: pass
+            # X ve Y boyutları (Genelde Sheet Size veya Used Size olarak geçer)
+            if ("len" in col or "boy" in col or "x" in col) and "size" not in col:
+                 try: veriler["x"] = float(str(df[col].iloc[0]).replace(',', '.'))
+                 except: pass
+            if ("wid" in col or "en" in col or "y" in col) and "size" not in col:
+                 try: veriler["y"] = float(str(df[col].iloc[0]).replace(',', '.'))
+                 except: pass
+                 
+        return veriler
+    except Exception as e:
+        st.error(f"Excel okuma hatası: {e}")
+        return {}
+
 def word_oku(file):
-    doc = Document(file)
-    text = "\n".join([p.text for p in doc.paragraphs] + [" ".join([c.text for c in r.cells]) for t in doc.tables for r in t.rows])
-    return analiz_motoru("word", text)
+    try:
+        doc = Document(file)
+        text = "\n".join([p.text for p in doc.paragraphs] + [" ".join([c.text for c in r.cells]) for t in doc.tables for r in t.rows])
+        return regex_taramasi(text)
+    except: return {}
 
 def resim_oku(image):
-    img_np = np.array(image)
-    if len(img_np.shape) == 3: img_gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    else: img_gray = img_np
-    _, img_thresh = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    text = pytesseract.image_to_string(Image.fromarray(img_thresh))
-    return analiz_motoru("ocr", text)
+    try:
+        img_np = np.array(image)
+        if len(img_np.shape) == 3: img_gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        else: img_gray = img_np
+        _, img_thresh = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        text = pytesseract.image_to_string(Image.fromarray(img_thresh))
+        return regex_taramasi(text)
+    except: return {}
 
 # --- ARAYÜZ ---
 
-# 1. BÖLÜM: MÜŞTERİ SEÇİMİ (EN ÜSTTE)
-st.title("🏭 Lazer Yönetim Paneli")
-
-# Müşteri veritabanını yükle
-kayitli_musteriler = musteri_listesi_getir()
-
-st.markdown("### 👤 Müşteri Seçimi")
+# Müşteri Seçimi (EN ÜSTTE)
+st.title("🏭 Lazer Yönetim & Metalix")
 col_mus1, col_mus2 = st.columns([3, 1])
 
 with col_mus1:
-    # Arama özellikli kutu (yazınca filtreler)
-    secenekler = ["➕ Yeni Müşteri Ekle"] + kayitli_musteriler
-    secim = st.selectbox("Müşteri Ara veya Seç", secenekler, index=0)
+    kayitli = musteri_listesi_getir()
+    secenekler = ["➕ Yeni Müşteri"] + kayitli
+    secim = st.selectbox("Müşteri Seçin", secenekler)
 
 with col_mus2:
-    if secim == "➕ Yeni Müşteri Ekle":
-        aktif_musteri = st.text_input("Yeni Firma Adı Girin", placeholder="Örn: Yılmaz Makina")
+    if secim == "➕ Yeni Müşteri":
+        aktif_musteri = st.text_input("Firma Adı", placeholder="Yeni Firma...")
     else:
         aktif_musteri = secim
-        st.success(f"Seçili: **{aktif_musteri}**")
+        st.info(f"Seçili: **{aktif_musteri}**")
 
-# Eğer müşteri seçilmediyse aşağıyı gösterme
 if not aktif_musteri:
-    st.warning("Lütfen işlem yapmak için bir müşteri seçin veya yeni oluşturun.")
+    st.warning("Devam etmek için müşteri seçin.")
     st.stop()
 
 st.divider()
 
-# 2. BÖLÜM: SEKMELER
-tab_is, tab_gecmis, tab_ayar = st.tabs([f"📝 {aktif_musteri} - Yeni İş", f"🗂️ {aktif_musteri} - Geçmişi", "⚙️ Ayarlar"])
+# Sekmeler
+tab1, tab2, tab3 = st.tabs(["🛒 Yeni Teklif", "🗂️ Müşteri Geçmişi", "⚙️ Ayarlar"])
 
-# --- TAB 1: YENİ İŞ OLUŞTURMA ---
-with tab_is:
-    col_sol, col_sag = st.columns([1, 1.2])
+with tab1:
+    col_sol, col_sag = st.columns([1, 1.3])
     
-    # SOL: ÜRÜN GİRİŞİ (ARA KONTROL)
+    # SOL: VERİ GİRİŞİ
     with col_sol:
-        st.markdown("#### 1. Veri Girişi")
-        uploaded_file = st.file_uploader("Dosya Yükle (Word/Resim)", type=['docx', 'jpg', 'png'])
+        st.markdown("#### 1. İş Verisi")
+        st.caption("Metalix Excel, Word veya Resim yükleyebilirsin.")
+        uploaded_file = st.file_uploader("Dosya Yükle", type=['xlsx', 'xls', 'docx', 'jpg', 'png'])
         
-        # Dosya Okuma
         if uploaded_file and "dosya_token" not in st.session_state:
-            try:
-                if uploaded_file.name.endswith('.docx'): vals = word_oku(uploaded_file)
-                else: vals = resim_oku(Image.open(uploaded_file))
-                
-                if "x" in vals: st.session_state.form_x = vals["x"]
-                if "y" in vals: st.session_state.form_y = vals["y"]
-                if "sure" in vals: st.session_state.form_sure = vals["sure"]
-                if "kalinlik" in vals: st.session_state.form_kal = vals["kalinlik"]
-                if "malzeme" in vals: st.session_state.form_malz = vals["malzeme"]
+            vals = {}
+            if uploaded_file.name.endswith(('.xlsx', '.xls')):
+                vals = excel_analiz(uploaded_file)
+                st.toast("Excel verisi okundu (Metalix Modu)", icon="📊")
+            elif uploaded_file.name.endswith('.docx'):
+                vals = word_oku(uploaded_file)
+                st.toast("Word verisi okundu", icon="📝")
+            else:
+                vals = resim_oku(Image.open(uploaded_file))
+                st.toast("Resim tarandı", icon="📸")
+            
+            # Formu Doldur
+            if vals:
+                for k, v in vals.items():
+                    if k in ['x', 'y', 'sure', 'kal', 'malz']:
+                        st.session_state[f'form_{k}'] = v
                 st.session_state.dosya_token = True
-                st.toast("Veriler çekildi, lütfen onaylayın.", icon="✅")
-            except: st.error("Okuma hatası.")
         
         if not uploaded_file and "dosya_token" in st.session_state: del st.session_state.dosya_token
-
-        # Form
-        with st.form("veri_onay"):
+        
+        with st.form("ekle_form"):
             c1, c2 = st.columns(2)
-            f_malz = c1.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=list(st.session_state.malzeme_db.keys()).index(st.session_state.form_malz) if st.session_state.form_malz in st.session_state.malzeme_db else 0)
+            # Malzeme index hatasını önlemek için try-except
+            try:
+                idx = list(st.session_state.malzeme_db.keys()).index(st.session_state.form_malz)
+            except: idx = 0
+            
+            f_malz = c1.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=idx)
             f_kal = c2.number_input("Kalınlık (mm)", value=float(st.session_state.form_kal))
             
             c3, c4 = st.columns(2)
-            f_birim = c3.radio("Birim", ["mm", "cm", "m"], horizontal=True)
-            f_adet = c4.number_input("Adet", 1, min_value=1)
+            f_x = c3.number_input("X (mm)", value=float(st.session_state.form_x))
+            f_y = c4.number_input("Y (mm)", value=float(st.session_state.form_y))
             
             c5, c6 = st.columns(2)
-            f_x = c5.number_input("X Boyutu", value=float(st.session_state.form_x))
-            f_y = c6.number_input("Y Boyutu", value=float(st.session_state.form_y))
+            f_sure = c5.number_input("Süre (dk)", value=float(st.session_state.form_sure))
+            f_adet = c6.number_input("Adet", 1, min_value=1)
             
-            c7, c8 = st.columns(2)
-            f_sure = c7.number_input("Süre (dk)", value=float(st.session_state.form_sure))
-            f_fire = c8.number_input("Fire (%)", value=float(st.session_state.form_fire))
+            f_fire = st.number_input("Fire (%)", value=0.0)
             
             if st.form_submit_button("Sepete Ekle ⬇️", type="primary", use_container_width=True):
-                # Birim çevirip sepete at
-                carpan = 1000 if f_birim == "m" else (10 if f_birim == "cm" else 1)
                 st.session_state.sepet.append({
-                    "Malzeme": f_malz, "K": f_kal, "X": f_x*carpan, "Y": f_y*carpan, 
-                    "Süre": f_sure, "Adet": f_adet, "Fire": f_fire, "Birim": f_birim
+                    "Malzeme": f_malz, "K": f_kal, "X": f_x, "Y": f_y, 
+                    "Süre": f_sure, "Adet": f_adet, "Fire": f_fire
                 })
                 st.rerun()
 
-    # SAĞ: SEPET VE HESAP
+    # SAĞ: HESAP
     with col_sag:
-        st.markdown(f"#### 2. Sepet ({len(st.session_state.sepet)} Parça)")
+        st.markdown(f"#### 2. Sepet ({len(st.session_state.sepet)} Kalem)")
         
         if st.session_state.sepet:
-            df_sepet = pd.DataFrame(st.session_state.sepet)
-            st.dataframe(df_sepet[["Malzeme", "K", "X", "Y", "Süre", "Adet"]], use_container_width=True, height=150)
+            df = pd.DataFrame(st.session_state.sepet)
+            st.dataframe(df, use_container_width=True, height=200)
             
-            if st.button("🗑️ Sepeti Boşalt"):
+            if st.button("Temizle", key="clean"):
                 st.session_state.sepet = []
                 st.rerun()
-            
-            # HESAP
+                
             toplam_tl = 0
             toplam_kg = 0
             
@@ -220,65 +250,47 @@ with tab_is:
                 fiyat = db["fiyat"] * st.session_state.dolar_kuru if db["birim"] == "USD" else db["fiyat"]
                 fire_kat = 1 / (1 - p["Fire"]/100) if p["Fire"] < 100 else 1
                 
-                malzeme_tutari = kg * fiyat * fire_kat
-                lazer_tutari = (p["Süre"] * p["Adet"]) * st.session_state.lazer_dk_ucret
+                malz_tut = kg * fiyat * fire_kat
+                lazer_tut = (p["Süre"] * p["Adet"]) * st.session_state.lazer_dk_ucret
                 
-                toplam_tl += malzeme_tutari + lazer_tutari
+                toplam_tl += malz_tut + lazer_tut
                 toplam_kg += kg
-            
+                
             st.divider()
-            c_res1, c_res2 = st.columns(2)
-            c_res1.metric("Toplam KG", f"{toplam_kg:.2f}")
-            c_res2.metric("Ham Maliyet", f"{toplam_tl:.2f} TL")
+            c1, c2 = st.columns(2)
+            c1.metric("Toplam KG", f"{toplam_kg:.2f}")
+            c2.metric("Maliyet", f"{toplam_tl:.2f} TL")
             
-            st.write("#### 💰 Satış & Kayıt")
-            
-            # Kâr ve İş Adı
+            st.write("#### 💰 Satış Fiyatı")
             kc1, kc2 = st.columns(2)
             kar = kc1.number_input("Kâr (%)", 25, step=5)
-            ekstra = kc2.number_input("Ekstra (TL)", 0)
+            ekstra = kc2.number_input("Ekstra Gider", 0)
             
-            final_fiyat = (toplam_tl * (1 + kar/100)) + ekstra
-            st.success(f"### TEKLİF: {final_fiyat:,.2f} TL")
+            teklif = (toplam_tl * (1 + kar/100)) + ekstra
+            st.success(f"### TOPLAM: {teklif:,.2f} TL")
             
-            is_adi = st.text_input("İşin Adı / Açıklama", placeholder="Örn: 2mm Flanş Kesimi")
-            
-            if st.button("💾 Müşteriye Kaydet", type="primary", use_container_width=True):
-                if not is_adi: is_adi = "Genel Kesim"
-                kayit_ekle(aktif_musteri, is_adi, final_fiyat, f"{len(st.session_state.sepet)} parça, {toplam_kg:.1f}kg")
-                st.session_state.sepet = [] # Kayıttan sonra sepeti temizle
-                st.balloons()
-                st.success(f"İşlem {aktif_musteri} hesabına işlendi!")
+            is_adi = st.text_input("İş Açıklaması", placeholder="Örn: Metalix Proje 1")
+            if st.button("💾 Kaydet", type="primary", use_container_width=True):
+                kayit_ekle(aktif_musteri, is_adi or "Genel", teklif, f"{len(st.session_state.sepet)} parça")
+                st.session_state.sepet = []
+                st.success("Kaydedildi!")
                 
         else:
-            st.info("Sepet boş. Yandaki formdan ürün ekleyin.")
+            st.info("Sepet boş.")
 
-# --- TAB 2: GEÇMİŞ (FİLTRELİ) ---
-with tab_gecmis:
-    st.header(f"🗂️ {aktif_musteri} - İş Geçmişi")
-    
+with tab2:
+    st.header(f"{aktif_musteri} - Geçmiş")
     if os.path.exists("musteri_gecmisi.csv"):
-        df_all = pd.read_csv("musteri_gecmisi.csv")
-        
-        # Sadece seçili müşteriyi filtrele
-        df_musteri = df_all[df_all["Müşteri"] == aktif_musteri]
-        
-        if not df_musteri.empty:
-            st.dataframe(df_musteri, use_container_width=True)
-            
-            toplam_is = df_musteri["Tutar (TL)"].sum()
-            st.info(f"Bu müşteriye yapılan toplam iş hacmi: **{toplam_is:,.2f} TL**")
-        else:
-            st.warning(f"{aktif_musteri} için henüz kayıt bulunamadı.")
-    else:
-        st.write("Veritabanı boş.")
+        try:
+            df_all = pd.read_csv("musteri_gecmisi.csv")
+            df_mus = df_all[df_all["Müşteri"] == aktif_musteri]
+            st.dataframe(df_mus, use_container_width=True)
+            st.info(f"Toplam Hacim: {df_mus['Tutar (TL)'].sum():,.2f} TL")
+        except: st.write("Kayıt yok.")
 
-# --- TAB 3: AYARLAR ---
-with tab_ayar:
-    st.write("### Genel Ayarlar")
+with tab3:
+    st.write("### Ayarlar")
     c1, c2 = st.columns(2)
-    st.session_state.dolar_kuru = c1.number_input("Dolar Kuru", value=st.session_state.dolar_kuru)
-    st.session_state.lazer_dk_ucret = c2.number_input("Lazer DK Ücreti", value=st.session_state.lazer_dk_ucret)
-    
-    if st.button("Ayarları Kaydet"):
-        st.toast("Ayarlar güncellendi.")
+    st.session_state.dolar_kuru = c1.number_input("Dolar", value=st.session_state.dolar_kuru)
+    st.session_state.lazer_dk_ucret = c2.number_input("Lazer (TL/dk)", value=st.session_state.lazer_dk_ucret)
+    if st.button("Kaydet"): st.toast("Kaydedildi")
