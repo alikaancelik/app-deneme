@@ -19,7 +19,7 @@ except ImportError:
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="ÖZÇELİK ENDÜSTRİ", layout="wide", page_icon="🏭")
 
-# --- CSS (GÖRÜNÜM AYARLARI - FİNAL) ---
+# --- CSS (ÖZEL RENK AYARLARI - İSTEĞİNE GÖRE DÜZENLENDİ) ---
 st.markdown("""
     <style>
     /* GENEL YAZILAR BEYAZ */
@@ -27,19 +27,27 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* GİRİŞ KUTULARI (Input) İÇİ */
-    /* Kutu içi beyaz, yazdığın yazı SİYAH olsun ki okunsun */
+    /* --- GİRİŞ KUTULARI (SİYAH ZEMİN, BEYAZ YAZI) --- */
+    /* Sayı ve Yazı yazdığımız kutuların içi */
     input {
-        color: #000000 !important;
-        background-color: #ffffff !important;
+        background-color: #000000 !important; /* Kutu Rengi: SİYAH */
+        color: #ffffff !important;            /* Yazı Rengi: BEYAZ */
+        border: 1px solid #444444 !important; /* Kenarlık: Gri */
     }
     
-    /* Selectbox (Seçim Kutusu) İçi */
+    /* Selectbox (Açılır Kutu) Ana Görünümü */
+    div[data-baseweb="select"] > div {
+        background-color: #000000 !important;
+        color: #ffffff !important;
+        border-color: #444444 !important;
+    }
+    
+    /* Selectbox İçindeki Yazı */
     div[data-baseweb="select"] span {
-        color: #000000 !important;
+        color: #ffffff !important;
     }
     
-    /* SONUÇ KARTLARI */
+    /* SONUÇ KARTLARI (Okunabilirlik İçin Beyaz Kaldı, İstersen Değişir) */
     div[data-testid="metric-container"] {
         background-color: #ffffff !important;
         border: 1px solid #cccccc !important;
@@ -47,11 +55,11 @@ st.markdown("""
         border-radius: 5px !important;
     }
     div[data-testid="metric-container"] label {
-        color: #444444 !important; /* Başlık Gri */
+        color: #444444 !important;
         font-weight: bold !important;
     }
     div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
-        color: #000000 !important; /* Rakam Siyah */
+        color: #000000 !important;
     }
     
     .stButton>button {width: 100%; border-radius: 5px; font-weight: bold;}
@@ -71,7 +79,7 @@ def load_data(filename):
         content = repo.get_contents(filename).decoded_content.decode()
         df = pd.read_csv(io.StringIO(content))
         
-        # Sütun Düzeltmeleri ve Onarım
+        # Sütun Düzeltmeleri
         if "musteri" in filename:
             rename_map = {"Firma Adı": "Firma", "Yetkili Kişi": "Yetkili", "Telefon": "Tel"}
             df.rename(columns=rename_map, inplace=True)
@@ -90,7 +98,7 @@ def load_data(filename):
             if "Ad" not in df.columns: df["Ad"] = "Siyah Sac"
             if "Fiyat" not in df.columns: df["Fiyat"] = 30.0
             if "Yog" not in df.columns: df["Yog"] = 7.85
-            if "Birim" in df.columns: df = df.drop(columns=["Birim"]) # Dolar kalktı
+            if "Birim" in df.columns: df = df.drop(columns=["Birim"])
 
         return df
     except:
@@ -124,6 +132,7 @@ def save_data(filename, df):
 # --- AYARLARI ÇEK ---
 if 'db_ayar' not in st.session_state:
     st.session_state.db_ayar = load_data("ayarlar.csv")
+    
 if 'db_malz' not in st.session_state:
     st.session_state.db_malz = load_data("malzemeler.csv")
 
@@ -139,8 +148,6 @@ except:
 
 if 'canli_dolar' not in st.session_state: st.session_state.canli_dolar = 34.50
 if 'sepet' not in st.session_state: st.session_state.sepet = []
-# Sipariş geçmişi toplu seçim state'i
-if 'tumunu_sec' not in st.session_state: st.session_state.tumunu_sec = False
 
 # --- ANALİZ ---
 def sure_cevir(zaman_str):
@@ -188,10 +195,11 @@ def analiz_et(dosya, tip):
         elif "st52" in tl: veriler["malz"] = "ST52"
         elif "paslanmaz" in tl: veriler["malz"] = "Paslanmaz"
         elif "galvaniz" in tl: veriler["malz"] = "Galvaniz"
+        
     except: pass
     return veriler
 
-# --- ARAYÜZ ---
+# --- ARAYÜZ (SOL MENÜ) ---
 with st.sidebar:
     st.image("https://ozcelikendustri.com/wp-content/uploads/2021/01/logo-1.png", width=200)
     st.title("ÖZÇELİK")
@@ -199,13 +207,13 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # BİLGİ PANELİ
+    # --- BİLGİ PANELİ ---
     if st.button("🔄 Canlı Dolar Çek"):
         try:
             r = requests.get("https://api.exchangerate-api.com/v4/latest/USD").json()
             st.session_state.canli_dolar = float(r["rates"]["TRY"])
             st.success("Güncellendi")
-        except: st.error("Hata")
+        except: st.error("Çekilemedi")
     
     st.info(f"💲 **Dolar:** {st.session_state.canli_dolar:.2f} TL")
     st.write(f"📈 **Kâr:** %{KAR}")
@@ -227,21 +235,33 @@ with st.sidebar:
 if menu == "Hesaplama":
     st.header("Teklif Hesaplayıcı")
     
-    # BASİT MÜŞTERİ GİRİŞİ
-    c1, c2 = st.columns([2,1])
-    girilen = c1.text_input("Müşteri Adı (Boşsa otomatik atanır):")
+    # MÜŞTERİ SEÇİMİ
+    df_mus = load_data("musteriler.csv")
+    kayitli_list = []
+    if not df_mus.empty and "Firma" in df_mus.columns:
+        kayitli_list = df_mus["Firma"].tolist()
+    
+    secim_tipi = st.radio("İşlem Türü:", ["⚡ Hızlı (Yeni/Kayıtsız)", "📂 Kayıtlı Müşteri"], horizontal=True)
     
     aktif_musteri = ""
-    if girilen:
-        aktif_musteri = girilen
-    else:
-        aktif_musteri = f"İsimsiz İş {datetime.now().strftime('%H%M')}"
     
-    c2.info(f"Kayıt: **{aktif_musteri}**")
+    if secim_tipi == "📂 Kayıtlı Müşteri":
+        if not kayitli_list:
+            st.warning("Kayıtlı müşteri yok.")
+        else:
+            aktif_musteri = st.selectbox("Firma Seç:", kayitli_list)
+    else:
+        c1, c2 = st.columns([2,1])
+        girilen = c1.text_input("Müşteri Adı (Boşsa otomatik atanır):")
+        if girilen:
+            aktif_musteri = girilen
+        else:
+            aktif_musteri = f"İsimsiz İş {datetime.now().strftime('%H%M')}"
+        c2.info(f"Kayıt: **{aktif_musteri}**")
 
     st.divider()
 
-    # GİRİŞ ALANI
+    # Giriş Alanı
     with st.expander("➕ Parça Ekle (Manuel & Word & Resim)", expanded=True):
         tab_man, tab_dos = st.tabs(["✍️ Manuel", "📂 Dosya"])
         
@@ -310,6 +330,7 @@ if menu == "Hesaplama":
                 "Sil": st.column_config.CheckboxColumn("Sil?", width="small"),
                 "En": st.column_config.NumberColumn("En (mm)", format="%.1f"),
                 "Boy": st.column_config.NumberColumn("Boy (mm)", format="%.1f"),
+                "Kalınlık": st.column_config.NumberColumn("Kal (mm)", format="%.1f"),
             }
         )
         
@@ -327,6 +348,7 @@ if menu == "Hesaplama":
             
             for item in final_sepet:
                 try:
+                    # Malzeme Fiyatını Al (Sadece TL)
                     if item["Malzeme"] in df_m.index:
                         m_info = df_m.loc[item["Malzeme"]]
                         m_fiyat = float(m_info["Fiyat"])
@@ -365,16 +387,17 @@ if menu == "Hesaplama":
             
             if c_save.button("💾 MÜŞTERİYE KAYDET"):
                 with st.spinner("Kaydediliyor..."):
-                    # 1. Müşteri Kaydet
+                    # 1. Müşteriyi Kaydet (Eğer yoksa)
                     df_m = load_data("musteriler.csv")
                     # Sütun yoksa oluştur (HATA ÖNLEYİCİ)
-                    if "Firma" not in df_m.columns: df_m = pd.DataFrame(columns=["Firma", "Yetkili", "Tel", "Adres"])
-                    
+                    if "Firma" not in df_m.columns: 
+                        df_m = pd.DataFrame(columns=["Firma", "Yetkili", "Tel", "Adres"])
+                        
                     if aktif_musteri not in df_m["Firma"].values:
                         new_m = pd.DataFrame([{"Firma": aktif_musteri, "Yetkili": "-", "Tel": "-", "Adres": "-"}])
                         save_data("musteriler.csv", pd.concat([df_m, new_m], ignore_index=True))
                     
-                    # 2. Sipariş Kaydet
+                    # 2. Siparişi Kaydet
                     df_s = load_data("siparisler.csv")
                     new_s = pd.DataFrame([{
                         "Tarih": datetime.now().strftime("%d-%m-%Y %H:%M"),
@@ -396,7 +419,7 @@ if menu == "Hesaplama":
                 st.rerun()
 
 # ==================================================
-# 2. SİPARİŞ GEÇMİŞİ (TOPLU SEÇ VE SİL)
+# 2. SİPARİŞ GEÇMİŞİ
 # ==================================================
 elif menu == "Sipariş Geçmişi":
     st.header("📜 Geçmiş İşler")
@@ -405,64 +428,29 @@ elif menu == "Sipariş Geçmişi":
     if df.empty:
         st.warning("Henüz kayıt yok.")
     else:
-        # 1. ARAMA
-        search = st.text_input("🔍 Ara (Müşteri veya Tarih):")
-        
-        # Filtreleme
+        search = st.text_input("🔍 Ara:")
         if search:
             mask = df.apply(lambda x: x.astype(str).str.contains(search, case=False)).any(axis=1)
             df = df[mask]
         
-        if df.empty:
-            st.info("Sonuç bulunamadı.")
-        else:
-            # 2. TOPLU SEÇİM BUTONU
-            col_sel, col_del = st.columns([1, 4])
-            
-            # Eğer state'te yoksa varsayılan False
-            if 'tumunu_sec' not in st.session_state: st.session_state.tumunu_sec = False
-            
-            # Tümünü Seç Checkbox'ı
-            tumunu_sec = col_sel.checkbox("Tümünü Seç", value=st.session_state.tumunu_sec)
-            
-            # DataFrame'e 'Sil' sütunu ekle (Varsayılan değer: Tümünü Seç checkbox'ına bağlı)
-            df["Sil"] = tumunu_sec
-            
-            # Tabloyu Göster
-            cols = ["Sil", "Tarih", "Müşteri", "İş", "Tutar"]
-            if "Detay" in df.columns: cols.append("Detay")
-            mevcut_cols = [c for c in cols if c in df.columns]
-            
-            edited_hist = st.data_editor(
-                df[mevcut_cols], 
-                hide_index=True, 
-                use_container_width=True,
-                column_config={"Sil": st.column_config.CheckboxColumn("Seç", width="small")}
-            )
-            
-            # 3. SİLME İŞLEMİ
-            if col_del.button("🗑️ Seçili Kayıtları Sil"):
-                to_delete = edited_hist[edited_hist["Sil"]]
-                
-                if not to_delete.empty:
-                    full_df = load_data("siparisler.csv")
-                    
-                    # Benzersiz anahtar oluşturarak sil
-                    def create_key(row): return f"{row['Tarih']}_{row['Müşteri']}_{row['Tutar']}"
-                    
-                    full_df['key'] = full_df.apply(create_key, axis=1)
-                    to_delete['key'] = to_delete.apply(create_key, axis=1)
-                    
-                    # Silinecekleri listeden çıkar
-                    new_df = full_df[~full_df['key'].isin(to_delete['key'])].drop(columns=['key'])
-                    
-                    save_data("siparisler.csv", new_df)
-                    st.success(f"{len(to_delete)} kayıt silindi!")
-                    st.session_state.tumunu_sec = False # Seçimi sıfırla
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.warning("Silinecek kayıt seçilmedi.")
+        df["Sil"] = False
+        cols = ["Sil", "Tarih", "Müşteri", "İş", "Tutar"]
+        if "Detay" in df.columns: cols.append("Detay")
+        mevcut_cols = [c for c in cols if c in df.columns]
+        
+        edited_hist = st.data_editor(df[mevcut_cols], hide_index=True, use_container_width=True)
+        
+        if st.button("🗑️ Seçili Kayıtları Sil"):
+            to_delete = edited_hist[edited_hist["Sil"]]
+            if not to_delete.empty:
+                full_df = load_data("siparisler.csv")
+                def create_key(row): return f"{row['Tarih']}_{row['Müşteri']}_{row['Tutar']}"
+                full_df['key'] = full_df.apply(create_key, axis=1)
+                to_delete['key'] = to_delete.apply(create_key, axis=1)
+                new_df = full_df[~full_df['key'].isin(to_delete['key'])].drop(columns=['key'])
+                save_data("siparisler.csv", new_df)
+                st.success("Silindi!")
+                st.rerun()
 
 # ==================================================
 # 3. AYARLAR
@@ -485,23 +473,22 @@ elif menu == "Ayarlar":
                 {"Key":"lazer_dk", "Val":n_lazer}, {"Key":"abkant", "Val":n_abkant}
             ])
             save_data("ayarlar.csv", new_df)
-            del st.session_state.db_ayar
+            st.session_state.db_ayar = new_df # Güncelle
             st.success("Kaydedildi!")
             st.rerun()
 
     with tab2:
-        if 'db_malz' in st.session_state:
-            df_m = st.session_state.db_malz
-            edited = st.data_editor(
-                df_m, 
-                num_rows="dynamic", 
-                use_container_width=True,
-                column_config={
-                    "Fiyat": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f")
-                }
-            )
-            if st.button("Malzemeleri Kaydet"):
-                st.session_state.db_malz = edited
-                save_data("malzemeler.csv", edited)
-                st.success("Güncellendi!")
-                st.rerun()
+        df_m = st.session_state.db_malz
+        edited = st.data_editor(
+            df_m, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config={
+                "Fiyat": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f")
+            }
+        )
+        if st.button("Malzemeleri Kaydet"):
+            save_data("malzemeler.csv", edited)
+            st.session_state.db_malz = edited # Güncelle
+            st.success("Güncellendi!")
+            st.rerun()
