@@ -21,7 +21,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- VARSAYILAN VERİTABANI (Sıfırlanırsa buraya döner) ---
+# --- VARSAYILAN VERİTABANI ---
 DEFAULT_MALZEME = {
     "S235JR (Siyah)": {"fiyat": 0.85, "birim": "USD", "yogunluk": 7.85},
     "DKP": {"fiyat": 0.90, "birim": "USD", "yogunluk": 7.85},
@@ -43,11 +43,7 @@ DEFAULT_ISCILIK = {
 if 'sepet' not in st.session_state: st.session_state.sepet = []
 if 'malzemeler' not in st.session_state: st.session_state.malzemeler = DEFAULT_MALZEME.copy()
 if 'ayarlar' not in st.session_state: st.session_state.ayarlar = DEFAULT_ISCILIK.copy()
-
-# Form verileri (Manuel giriş için)
-defaults = {"x": 0.0, "y": 0.0, "sure": 0.0, "kal": 2.0, "fire": 0.0, "malz": "S235JR (Siyah)"}
-for k, v in defaults.items():
-    if f'form_{k}' not in st.session_state: st.session_state[f'form_{k}'] = v
+if 'form_malz' not in st.session_state: st.session_state.form_malz = "S235JR (Siyah)"
 
 # --- FONKSİYONLAR ---
 
@@ -87,33 +83,31 @@ def cypcut_ocr_analiz(image):
     """CypCut ekran görüntüsüne özel analiz (X, Y, Süre, Fire)"""
     veriler = {}
     try:
-        # Görüntü işleme (Netleştirme)
+        # Görüntü işleme
         img_np = np.array(image)
         if len(img_np.shape) == 3: img_gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         else: img_gray = img_np
         
-        # Sadece siyah beyaz yap (Threshold)
         _, img_thresh = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY)
         text = pytesseract.image_to_string(Image.fromarray(img_thresh))
         
-        # 1. SÜRE (Kesim 00:21:34)
+        # Süre
         zaman_match = re.search(r'(?:Kesim|Cut|Time).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE)
         if zaman_match: veriler["sure"] = sure_cevir(zaman_match.group(1))
         
-        # 2. X ve Y (Tablo yapısı: X 2988.5 gibi)
-        # CypCut alt tablosunu yakalamak için spesifik regex
+        # X ve Y
         x_match = re.search(r'X\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         y_match = re.search(r'Y\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         
         if x_match: veriler["x"] = float(x_match.group(1).replace(',', '.'))
         if y_match: veriler["y"] = float(y_match.group(1).replace(',', '.'))
         
-        # 3. FİRE (Fire (%) 10.513)
+        # Fire
         fire_match = re.search(r'Fire.*?(\d+[.,]\d+)', text, re.IGNORECASE)
         if fire_match: veriler["fire"] = float(fire_match.group(1).replace(',', '.'))
         
-        # 4. KALINLIK (3000 x 1500 x 1)
-        kal_match = re.search(r'x\s*(\d+[.,]?\d*)\s*$', text, re.MULTILINE) # Satır sonundaki x 1 gibi
+        # Kalınlık
+        kal_match = re.search(r'x\s*(\d+[.,]?\d*)\s*$', text, re.MULTILINE)
         if not kal_match:
              kal_match = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
         if kal_match: veriler["kal"] = float(kal_match.group(1).replace(',', '.'))
@@ -125,8 +119,6 @@ def cypcut_ocr_analiz(image):
 # --- ARAYÜZ (SIDEBAR VE MENÜLER) ---
 
 with st.sidebar:
-    # LOGO ALANI
-    # Buraya kendi logonuzun internet linkini koyabilirsiniz. Şimdilik text.
     st.markdown("## 🏭 ÖZÇELİK ENDÜSTRİ")
     st.info("Lazer Kesim & Büküm Yönetim Sistemi")
     
@@ -140,7 +132,7 @@ with st.sidebar:
 if secilen_sayfa == "🧮 Maliyet Hesaplama":
     st.markdown('<div class="main-header">Teklif ve Maliyet Hesaplayıcı</div>', unsafe_allow_html=True)
     
-    # Müşteri Seçimi (En Üstte)
+    # Müşteri Seçimi
     df_musteri = musteri_veritabani_yukle()
     musteri_listesi = sorted(df_musteri["Müşteri"].unique().tolist())
     
@@ -152,11 +144,10 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
             aktif_musteri = st.text_input("Firma Adı:", placeholder="Örn: Yılmaz Makina")
         else:
             aktif_musteri = secilen_musteri
-            # Müşteri seçilince geçmiş bakiye vs buraya eklenebilir.
     
     st.markdown("---")
 
-    # GİRİŞ ALANI (Manuel veya Dosya)
+    # GİRİŞ ALANI
     tab_dosya, tab_manuel = st.tabs(["📂 Dosya Yükle (OCR/Word)", "✍️ Manuel Giriş"])
     
     with tab_dosya:
@@ -169,23 +160,19 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                     for f in uploaded_files:
                         vals = {}
                         if f.name.endswith('.docx'):
-                            # Word okuma fonksiyonu (basitleştirilmiş)
                             try:
                                 doc = Document(f)
-                                full_text = "\n".join([p.text for p in doc.paragraphs])
-                                vals = cypcut_ocr_analiz(Image.new('RGB', (10, 10))) # Dummy call for structure
-                                # Word regex'i burada daha detaylı olabilir
+                                vals = cypcut_ocr_analiz(Image.new('RGB', (10, 10))) # Word için dummy
                             except: pass
                         else:
                             vals = cypcut_ocr_analiz(Image.open(f))
                         
-                        # Sepete Ekle
                         st.session_state.sepet.append({
                             "Dosya": f.name,
-                            "Malzeme": st.session_state.form_malz, # Varsayılan malzeme
+                            "Malzeme": st.session_state.form_malz,
                             "K (mm)": vals.get("kal", 2.0),
-                            "En (mm)": vals.get("y", 1000.0), # CypCut Y = En
-                            "Boy (mm)": vals.get("x", 2000.0), # CypCut X = Boy
+                            "En (mm)": vals.get("y", 1000.0),
+                            "Boy (mm)": vals.get("x", 2000.0),
                             "Adet": 1,
                             "Süre (dk)": vals.get("sure", 0.0),
                             "Fire (%)": vals.get("fire", 0.0),
@@ -197,16 +184,17 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
     with tab_manuel:
         with st.form("manuel_form"):
             c_m1, c_m2, c_m3 = st.columns(3)
+            # HATANIN DÜZELTİLDİĞİ YER: value=... parametreleri eklendi
             m_malz = c_m1.selectbox("Malzeme", list(st.session_state.malzemeler.keys()))
-            m_kal = c_m2.number_input("Kalınlık (mm)", 2.0)
-            m_adet = c_m3.number_input("Adet", 1, min_value=1)
+            m_kal = c_m2.number_input("Kalınlık (mm)", value=2.0)
+            m_adet = c_m3.number_input("Adet", value=1, min_value=1)
             
             c_m4, c_m5, c_m6 = st.columns(3)
-            m_en = c_m4.number_input("En (mm)", 0.0)
-            m_boy = c_m5.number_input("Boy (mm)", 0.0)
-            m_sure = c_m6.number_input("Kesim Süresi (dk)", 0.0)
+            m_en = c_m4.number_input("En (mm)", value=0.0)
+            m_boy = c_m5.number_input("Boy (mm)", value=0.0)
+            m_sure = c_m6.number_input("Kesim Süresi (dk)", value=0.0)
             
-            m_bukum = st.number_input("Büküm Sayısı (Adet başı)", 0)
+            m_bukum = st.number_input("Büküm Sayısı (Adet başı)", value=0)
             
             if st.form_submit_button("Listeye Ekle"):
                 st.session_state.sepet.append({
@@ -218,13 +206,12 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                 })
                 st.rerun()
 
-    # SEPET VE HESAPLAMA (DÜZENLENEBİLİR TABLO)
+    # SEPET VE HESAPLAMA
     st.markdown("### 🛒 Sipariş Listesi")
     
     if len(st.session_state.sepet) > 0:
         df_sepet = pd.DataFrame(st.session_state.sepet)
         
-        # Excel Tarzı Düzenlenebilir Tablo
         edited_df = st.data_editor(
             df_sepet,
             column_config={
@@ -234,31 +221,26 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                 "Adet": st.column_config.NumberColumn("Adet", min_value=1),
                 "Fire (%)": st.column_config.NumberColumn("Fire %", max_value=100)
             },
-            num_rows="dynamic", # SİLME VE EKLEME AKTİF
+            num_rows="dynamic",
             use_container_width=True,
             key="sepet_editor"
         )
         
-        # HESAPLA BUTONU
         if st.button("💰 Hesapla", type="primary"):
             toplam_tl = 0
             toplam_kg = 0
-            detaylar = []
             
             for idx, row in edited_df.iterrows():
                 malz = st.session_state.malzemeler[row["Malzeme"]]
                 ayarlar = st.session_state.ayarlar
                 
-                # Ağırlık Hesabı
                 hacim = row["En (mm)"] * row["Boy (mm)"] * row["K (mm)"]
                 kg = (hacim * malz["yogunluk"]) / 1_000_000 * row["Adet"]
                 
-                # Malzeme Fiyatı
                 fiyat = malz["fiyat"] * ayarlar["dolar_kuru"] if malz["birim"] == "USD" else malz["fiyat"]
                 fire_carpan = 1 / (1 - row["Fire (%)"]/100) if row["Fire (%)"] < 100 else 1
                 tutar_malzeme = kg * fiyat * fire_carpan
                 
-                # İşçilikler
                 tutar_lazer = (row["Süre (dk)"] * row["Adet"]) * ayarlar["lazer_dk"]
                 tutar_bukum = (row["Büküm"] * row["Adet"]) * ayarlar["abkant_bukum"]
                 
@@ -266,7 +248,6 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                 toplam_tl += satir_toplam
                 toplam_kg += kg
                 
-            # SONUÇ GÖSTERİMİ
             col_res1, col_res2, col_res3 = st.columns(3)
             with col_res1:
                 st.markdown('<div class="metric-card">Toplam Ağırlık<br><h3>{:.2f} kg</h3></div>'.format(toplam_kg), unsafe_allow_html=True)
@@ -278,7 +259,6 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                 teklif = toplam_tl * (1 + kar/100)
                 st.success(f"TEKLİF: {teklif:,.2f} TL")
             
-            # KAYDETME
             st.markdown("---")
             is_adi = st.text_input("İş Tanımı / Proje Adı", placeholder="Örn: 2024 Makina Kapakları")
             if st.button("💾 Müşteriye Kaydet ve Temizle"):
@@ -286,7 +266,7 @@ if secilen_sayfa == "🧮 Maliyet Hesaplama":
                     st.error("Müşteri adı girilmedi!")
                 else:
                     is_kaydet(aktif_musteri, is_adi or "Genel Sipariş", teklif, f"{len(edited_df)} kalem, {toplam_kg:.1f}kg")
-                    st.session_state.sepet = [] # Sepeti boşalt
+                    st.session_state.sepet = []
                     st.balloons()
                     st.success("İşlem başarıyla kaydedildi!")
                     st.rerun()
@@ -301,7 +281,6 @@ elif secilen_sayfa == "👥 Müşteri Veritabanı":
     df = musteri_veritabani_yukle()
     
     if not df.empty:
-        # Filtreleme
         col_f1, col_f2 = st.columns([1, 2])
         filtre_musteri = col_f1.selectbox("Müşteri Filtrele", ["Tümü"] + sorted(df["Müşteri"].unique().tolist()))
         
@@ -315,7 +294,6 @@ elif secilen_sayfa == "👥 Müşteri Veritabanı":
         if not df_goster.empty:
             toplam_ciro = df_goster["Tutar"].sum()
             st.info(f"Seçili dönem/müşteri toplam iş hacmi: **{toplam_ciro:,.2f} TL**")
-            
     else:
         st.warning("Henüz veritabanında kayıtlı iş yok.")
 
@@ -328,7 +306,6 @@ elif secilen_sayfa == "⚙️ Ayarlar & Malzemeler":
     with tab_malzeme:
         st.info("Buradaki değişiklikler yeni hesaplamaları etkiler.")
         
-        # Malzemeleri bir DataFrame'e çevirip editörde gösterelim
         malz_list = []
         for k, v in st.session_state.malzemeler.items():
             row = {"Malzeme": k, "Fiyat": v["fiyat"], "Birim": v["birim"], "Yoğunluk": v["yogunluk"]}
@@ -348,7 +325,6 @@ elif secilen_sayfa == "⚙️ Ayarlar & Malzemeler":
         )
         
         if st.button("Malzeme Ayarlarını Kaydet"):
-            # DataFrame'i geri sözlüğe çevir
             yeni_sozluk = {}
             for index, row in edited_malz.iterrows():
                 yeni_sozluk[row["Malzeme"]] = {
@@ -361,11 +337,9 @@ elif secilen_sayfa == "⚙️ Ayarlar & Malzemeler":
 
     with tab_iscilik:
         c1, c2 = st.columns(2)
-        
         with c1:
             st.subheader("Döviz")
             yeni_dolar = st.number_input("Dolar Kuru (TL)", value=float(st.session_state.ayarlar["dolar_kuru"]))
-            
         with c2:
             st.subheader("İşçilik Giderleri (TL)")
             yeni_lazer = st.number_input("Lazer Kesim (TL/dk)", value=float(st.session_state.ayarlar["lazer_dk"]))
