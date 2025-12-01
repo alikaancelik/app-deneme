@@ -1,19 +1,111 @@
 import streamlit as st
 import pandas as pd
 import cv2
-import numpy as np
 import pytesseract
 from PIL import Image
 from docx import Document
 import re
+import requests
+import os
+from datetime import datetime
 
-# Sayfa Ayarları
-st.set_page_config(page_title="Pro Lazer Teklif (Hibrit)", layout="wide", page_icon="🏭")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="Lazer Atölye Yönetimi", layout="wide", page_icon="🏭")
+
+# --- GLOBAL DEĞİŞKENLER VE SESSION STATE ---
+if 'malzeme_db' not in st.session_state:
+    st.session_state.malzeme_db = {
+        "DKP": {"fiyat": 0.90, "birim": "USD", "yogunluk": 7.85},
+        "Paslanmaz": {"fiyat": 3.50, "birim": "USD", "yogunluk": 7.9},
+        "Alüminyum": {"fiyat": 3.00, "birim": "USD", "yogunluk": 2.7}
+    }
+
+if 'iscilik_db' not in st.session_state:
+    st.session_state.iscilik_db = {
+        "lazer_dk": 20.0,
+        "abkant": 10.0,
+        "kaynak": 350.0
+    }
+
+if 'dolar_kuru' not in st.session_state:
+    st.session_state.dolar_kuru = 34.0
 
 # --- YARDIMCI FONKSİYONLAR ---
 
+def dolar_kuru_getir():
+    """Canlı dolar kurunu çekmeye çalışır, olmazsa manuel değeri kullanır"""
+    try:
+        url = "https://api.exchangerate-api.com/v4/latest/USD"
+        response = requests.get(url, timeout=2)
+        data = response.json()
+        kur = data["rates"]["TRY"]
+        return float(kur)
+    except:
+        return st.session_state.dolar_kuru
+
+@st.dialog("⚙️ Atölye Ayarları")
+def ayarlari_ac():
+    st.write("Birim fiyatları ve döviz ayarlarını buradan yönetebilirsiniz.")
+    
+    # 1. Döviz Ayarı
+    col_kur1, col_kur2 = st.columns([2, 1])
+    with col_kur1:
+        yeni_kur = st.number_input("Dolar Kuru (TL)", value=float(st.session_state.dolar_kuru), format="%.4f")
+    with col_kur2:
+        if st.button("🔄 Canlı Kur Çek"):
+            canli = dolar_kuru_getir()
+            st.session_state.dolar_kuru = canli
+            st.rerun()
+            
+    st.session_state.dolar_kuru = yeni_kur
+    st.markdown("---")
+    
+    # 2. Malzeme Fiyatları
+    st.subheader("Malzeme Fiyatları")
+    for malz, detay in st.session_state.malzeme_db.items():
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            st.write(f"**{malz}**")
+        with c2:
+            yeni_fiyat = st.number_input(f"Fiyat", value=float(detay['fiyat']), key=f"f_{malz}")
+        with c3:
+            yeni_birim = st.selectbox(f"Birim", ["USD", "TL"], index=0 if detay['birim']=="USD" else 1, key=f"b_{malz}")
+        
+        # Güncelleme
+        st.session_state.malzeme_db[malz]['fiyat'] = yeni_fiyat
+        st.session_state.malzeme_db[malz]['birim'] = yeni_birim
+    
+    st.markdown("---")
+    # 3. İşçilikler
+    st.subheader("İşçilik Giderleri (TL)")
+    lazer = st.number_input("Lazer Kesim (TL/dk)", value=st.session_state.iscilik_db['lazer_dk'])
+    abkant = st.number_input("Abkant (Vuruş Başı)", value=st.session_state.iscilik_db['abkant'])
+    
+    if st.button("Ayarları Kaydet ve Kapat", type="primary"):
+        st.session_state.iscilik_db['lazer_dk'] = lazer
+        st.session_state.iscilik_db['abkant'] = abkant
+        st.rerun()
+
+def kayitlari_yukle():
+    if os.path.exists("teklifler.csv"):
+        return pd.read_csv("teklifler.csv")
+    return pd.DataFrame(columns=["Tarih", "Musteri", "Is_Adi", "Malzeme", "Tutar", "Durum"])
+
+def kayit_ekle(musteri, is_adi, malzeme, tutar, durum):
+    df = kayitlari_yukle()
+    yeni_kayit = {
+        "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "Musteri": musteri if musteri else "Ayaklı Müşteri",
+        "Is_Adi": is_adi,
+        "Malzeme": malzeme,
+        "Tutar": round(tutar, 2),
+        "Durum": durum
+    }
+    df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
+    df.to_csv("teklifler.csv", index=False)
+
+# OCR ve Analiz Fonksiyonları (Önceki koddan miras)
 def sureyi_dakikaya_cevir(zaman_str):
-    """00:21:34 formatını dakikaya çevirir"""
     try:
         if not zaman_str: return 0.0
         zaman_str = str(zaman_str).strip()
@@ -21,151 +113,157 @@ def sureyi_dakikaya_cevir(zaman_str):
         if len(parts) == 3: return (parts[0] * 60) + parts[1] + (parts[2] / 60)
         elif len(parts) == 2: return parts[0] + (parts[1] / 60)
         return 0.0
-    except:
-        return 0.0
+    except: return 0.0
 
-def verileri_temizle(text):
-    """Metin içinden regex ile verileri çeker (Hem Word hem Resim için ortak mantık)"""
-    veriler = {
-        "sure": 0.0, "x": 0.0, "y": 0.0, "kalinlik": 0.0, 
-        "adet": 1, "fire": 0.0, "malzeme": "Belirsiz"
-    }
+def analiz_et(text):
+    veriler = {"sure": 0.0, "x": 0.0, "y": 0.0, "kalinlik": 2.0, "adet": 1, "fire": 0.0, "malzeme": "DKP"}
     
-    # 1. Süre (Kesim 00:21:34)
     zaman_match = re.search(r'(\d{2}:\d{2}:\d{2})', text)
     if zaman_match: veriler["sure"] = sureyi_dakikaya_cevir(zaman_match.group(1))
     
-    # 2. X ve Y
     x_match = re.search(r'X\s*[:]?\s*(\d+[.,]\d+)', text)
     y_match = re.search(r'Y\s*[:]?\s*(\d+[.,]\d+)', text)
     if x_match: veriler["x"] = float(x_match.group(1).replace(',', '.'))
     if y_match: veriler["y"] = float(y_match.group(1).replace(',', '.'))
     
-    # 3. Kalınlık (3000 x 1500 x 1)
     kalinlik_match = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
     if kalinlik_match: veriler["kalinlik"] = float(kalinlik_match.group(1).replace(',', '.'))
     
-    # 4. Adet ve Fire
     adet_match = re.search(r'Adet\s*[:]?\s*(\d+)', text)
     if adet_match: veriler["adet"] = int(adet_match.group(1))
     
     fire_match = re.search(r'Fire\s*\(%\)\s*(\d+[.,]\d+)', text)
     if fire_match: veriler["fire"] = float(fire_match.group(1).replace(',', '.'))
     
-    # 5. Malzeme Tahmini
     text_lower = text.lower()
-    if any(x in text_lower for x in ["dkp", "steel", "siyah", "hr"]): veriler["malzeme"] = "DKP"
-    elif any(x in text_lower for x in ["paslanmaz", "inox", "304", "316"]): veriler["malzeme"] = "Paslanmaz"
+    if any(x in text_lower for x in ["dkp", "steel", "siyah"]): veriler["malzeme"] = "DKP"
+    elif any(x in text_lower for x in ["paslanmaz", "inox", "304"]): veriler["malzeme"] = "Paslanmaz"
     elif any(x in text_lower for x in ["alu", "alüminyum"]): veriler["malzeme"] = "Alüminyum"
-        
+    
     return veriler
 
-def resimden_oku(image):
-    """Görüntüyü işler ve metne çevirir"""
-    text = pytesseract.image_to_string(image)
-    return veriler_temizle(text)
+# --- ANA UYGULAMA ---
 
-def wordden_oku(file):
-    """Word dosyasını işler ve metne çevirir"""
-    doc = Document(file)
-    full_text = []
-    for para in doc.paragraphs: full_text.append(para.text)
-    for table in doc.tables:
-        for row in table.rows:
-            full_text.append(" ".join([cell.text for cell in row.cells]))
-    return veriler_temizle("\n".join(full_text))
+# Üst Bar ve Ayarlar Butonu
+col_head1, col_head2 = st.columns([5, 1])
+with col_head1:
+    st.title("🏭 Lazer Kesim & Teklif Sistemi")
+with col_head2:
+    if st.button("⚙️ Ayarlar", type="primary"):
+        ayarlari_ac()
 
-# --- ARAYÜZ ---
-st.sidebar.header("⚙️ Ayarlar")
-with st.sidebar.expander("Fiyatlar ($/TL)", expanded=True):
-    dolar_kuru = st.number_input("Dolar Kuru", value=32.0)
-    f_dkp = st.number_input("DKP ($/kg)", value=0.90)
-    f_pas = st.number_input("Paslanmaz ($/kg)", value=3.50)
-    f_alu = st.number_input("Alüminyum ($/kg)", value=3.00)
-    lazer_dk_tl = st.number_input("Lazer (TL/dk)", value=20.0)
+st.info(f"💵 Güncel Dolar Kuru: **{st.session_state.dolar_kuru:.4f} TL**")
 
-st.title("🏭 Çoklu Rapor Analizcisi")
-st.caption("İster Fotoğraf (.jpg), İster Dosya (.docx) yükleyin.")
+# Sekmeler
+tab_hesap, tab_gecmis = st.tabs(["📝 Yeni Hesaplama", "🗂️ Kayıtlar & Müşteriler"])
 
-uploaded_file = st.file_uploader("Dosya Seçin", type=['png', 'jpg', 'jpeg', 'docx'])
-
-# Varsayılanlar
-v = {"sure": 0.0, "x": 0.0, "y": 0.0, "kalinlik": 2.0, "adet": 1, "fire": 0.0, "malzeme": "DKP"}
-kaynak_tipi = ""
-
-if uploaded_file:
-    with st.spinner('Dosya analiz ediliyor...'):
+with tab_hesap:
+    # Dosya Yükleme Alanı
+    uploaded_file = st.file_uploader("Rapor Yükle (Word veya Resim)", type=['docx', 'png', 'jpg', 'jpeg'])
+    
+    # Varsayılanlar
+    v = {"sure": 0.0, "x": 0.0, "y": 0.0, "kalinlik": 2.0, "adet": 1, "fire": 0.0, "malzeme": "DKP"}
+    
+    if uploaded_file:
         try:
             if uploaded_file.name.endswith('.docx'):
-                v = wordden_oku(uploaded_file)
-                kaynak_tipi = "Word Dosyası"
-                st.success("Word dosyası başarıyla okundu.")
+                doc = Document(uploaded_file)
+                full_text = "\n".join([p.text for p in doc.paragraphs] + [" ".join([c.text for c in r.cells]) for t in doc.tables for r in t.rows])
+                v = analiz_et(full_text)
+                st.success("Word dosyası verileri çekildi.")
             else:
                 image = Image.open(uploaded_file)
-                st.image(image, width=300)
-                v = resimden_oku(image)
-                kaynak_tipi = "Görüntü İşleme (OCR)"
-                st.success("Fotoğraf başarıyla tarandı.")
-                
+                text = pytesseract.image_to_string(image)
+                v = analiz_et(text)
+                st.success("Görüntü verileri çekildi.")
         except Exception as e:
-            st.error(f"Hata oluştu: {e}")
+            st.error(f"Hata: {e}")
 
-st.markdown("---")
+    st.markdown("#### 1. İş Detayları")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        secilen_malzeme = st.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=["DKP", "Paslanmaz", "Alüminyum"].index(v["malzeme"]) if v["malzeme"] in st.session_state.malzeme_db else 0)
+        kalinlik = st.number_input("Kalınlık (mm)", value=float(v["kalinlik"] if v["kalinlik"]>0 else 2.0))
+        adet = st.number_input("Plaka/Parça Adeti", value=int(v["adet"]))
+        
+    with col2:
+        x_boyut = st.number_input("Kullanılan X (mm)", value=float(v["x"]))
+        y_boyut = st.number_input("Kullanılan Y (mm)", value=float(v["y"]))
+        fire_orani = st.number_input("Fire Oranı (%)", value=float(v["fire"]))
+        
+    with col3:
+        kesim_suresi = st.number_input("Kesim Süresi (dk)", value=float(v["sure"]))
+        ekstra_tl = st.number_input("Ekstra Gider (TL)", value=0.0)
+        kar_marji = st.slider("Kâr Marjı (%)", 0, 100, 25)
 
-# SONUÇ VE DÜZENLEME EKRANI
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.subheader("1. Malzeme")
-    # Malzeme listesindeki indexi bulma hatasını önlemek için kontrol
-    liste_malzeme = ["DKP", "Paslanmaz", "Alüminyum"]
-    secili_index = 0
-    if v["malzeme"] in liste_malzeme: secili_index = liste_malzeme.index(v["malzeme"])
+    # HESAPLAMA MOTORU
+    # 1. Malzeme Fiyatını Bul ve TL'ye Çevir
+    malzeme_bilgi = st.session_state.malzeme_db[secilen_malzeme]
+    birim_fiyat = malzeme_bilgi['fiyat']
     
-    r_malzeme = st.selectbox("Tür", liste_malzeme, index=secili_index)
-    r_kalinlik = st.number_input("Kalınlık (mm)", value=float(v["kalinlik"] if v["kalinlik"]>0 else 2.0))
-    r_adet = st.number_input("Plaka Adeti", value=int(v["adet"]))
+    if malzeme_bilgi['birim'] == "USD":
+        birim_fiyat_tl = birim_fiyat * st.session_state.dolar_kuru
+    else:
+        birim_fiyat_tl = birim_fiyat
+        
+    # 2. Ağırlık ve Maliyet
+    yogunluk = malzeme_bilgi['yogunluk']
+    hacim_mm3 = x_boyut * y_boyut * kalinlik
+    agirlik_kg = (hacim_mm3 * yogunluk) / 1_000_000
+    toplam_kg = agirlik_kg * adet
+    
+    # Fire Hesabı
+    fire_carpan = 1 / (1 - (fire_orani/100)) if fire_orani < 100 else 1
+    
+    malzeme_maliyeti = toplam_kg * birim_fiyat_tl * fire_carpan
+    lazer_maliyeti = kesim_suresi * st.session_state.iscilik_db['lazer_dk']
+    
+    ham_maliyet = malzeme_maliyeti + lazer_maliyeti + ekstra_tl
+    satis_fiyati = ham_maliyet * (1 + kar_marji/100)
 
-with col2:
-    st.subheader("2. Kullanım & Fire")
-    r_x = st.number_input("X (mm)", value=float(v["x"]))
-    r_y = st.number_input("Y (mm)", value=float(v["y"]))
-    r_fire = st.number_input("Fire (%)", value=float(v["fire"]))
-    
-    # Fire 0 geldiyse ve boyutlar varsa tahmini hesapla
-    if r_fire == 0 and r_x > 0:
-        tahmini = ((4.5 - (r_x*r_y/1000000))/4.5)*100 # 3000x1500=4.5m2 varsayımı
-        if tahmini > 0: st.caption(f"Otomatik Hesaplanan Tahmini Fire: %{tahmini:.1f}")
+    st.markdown("---")
+    # SONUÇ GÖSTERİMİ
+    c_res1, c_res2, c_res3 = st.columns(3)
+    c_res1.metric("Toplam Ağırlık", f"{toplam_kg:.2f} kg")
+    c_res2.metric("Ham Maliyet", f"{ham_maliyet:.2f} TL")
+    c_res3.metric("SATIŞ FİYATI", f"{satis_fiyati:.2f} TL", delta_color="inverse")
 
-with col3:
-    st.subheader("3. İşçilik")
-    r_sure = st.number_input("Kesim Süresi (dk)", value=float(v["sure"]))
-    r_ekstra = st.number_input("Ekstra Gider (TL)", value=0.0)
+    # KAYIT BÖLÜMÜ
+    st.markdown("#### 💾 Kaydet ve Arşivle")
+    with st.expander("Bu Teklifi Kaydet", expanded=True):
+        kc1, kc2, kc3 = st.columns([2, 2, 1])
+        with kc1:
+            musteri_adi = st.text_input("Firma / Müşteri Adı", placeholder="Boş ise 'Ayaklı Müşteri'")
+        with kc2:
+            is_adi = st.text_input("İşin Adı / Tanımı", placeholder="Örn: 2mm DKP Flanş Kesimi")
+        with kc3:
+            kaydet_btn = st.button("Sisteme Kaydet", type="primary")
+            
+        if kaydet_btn:
+            kayit_ekle(musteri_adi, is_adi, f"{secilen_malzeme} {kalinlik}mm", satis_fiyati, "Teklif Verildi")
+            st.success("✅ Kayıt başarıyla eklendi! 'Kayıtlar' sekmesinden görebilirsiniz.")
 
-# HESAPLA
-if st.button("HESAPLA", type="primary"):
-    # Yoğunluklar
-    rho = {"DKP": 7.85, "Paslanmaz": 7.9, "Alüminyum": 2.7}[r_malzeme]
-    kg_fiyat = {"DKP": f_dkp, "Paslanmaz": f_pas, "Alüminyum": f_alu}[r_malzeme]
+with tab_gecmis:
+    st.header("🗂️ Müşteri ve İş Kayıtları")
+    df = kayitlari_yukle()
     
-    # Ağırlık (Net parça ağırlığı değil, kullanılan plaka ağırlığı)
-    kullanilan_hacim = r_x * r_y * r_kalinlik
-    kullanilan_kg = (kullanilan_hacim * rho) / 1_000_000
-    toplam_kg = kullanilan_kg * r_adet
+    # Filtreleme
+    firmalar = ["Tümü"] + list(df["Musteri"].unique()) if not df.empty else ["Tümü"]
+    secilen_firma = st.selectbox("Firmaya Göre Filtrele", firmalar)
     
-    # Fire Maliyeti Hesabı
-    # Eğer fire %20 ise, 100 birimlik malzemenin maliyeti 100/0.8 olur.
-    fire_carpan = 1 / (1 - (r_fire/100)) if r_fire < 100 else 1
+    if secilen_firma != "Tümü":
+        gosterilecek_df = df[df["Musteri"] == secilen_firma]
+    else:
+        gosterilecek_df = df
+        
+    st.dataframe(gosterilecek_df, use_container_width=True)
     
-    malzeme_tl = toplam_kg * kg_fiyat * dolar_kuru * fire_carpan
-    lazer_tl = r_sure * lazer_dk_tl
-    toplam_maliyet = malzeme_tl + lazer_tl + r_ekstra
-    
-    st.info(f"Hesaplama Kaynağı: {kaynak_tipi}")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Toplam KG", f"{toplam_kg:.2f}")
-    c2.metric("Maliyet", f"{toplam_maliyet:.2f} TL")
-    
-    kar = st.slider("Kâr %", 0, 100, 25)
-    satis = toplam_maliyet * (1 + kar/100)
-    c3.metric("TEKLİF", f"{satis:.2f} TL", delta_color="inverse")
+    # İstatistik
+    if not gosterilecek_df.empty:
+        toplam_is_hacmi = gosterilecek_df["Tutar"].sum()
+        st.caption(f"Görüntülenen Toplam İş Hacmi: {toplam_is_hacmi:,.2f} TL")
+        
+        # Excel İndir
+        with open("teklifler.csv", "rb") as file:
+            st.download_button("Excel/CSV Olarak İndir", file, "teklifler.csv")
