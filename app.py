@@ -19,15 +19,26 @@ except ImportError:
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="ÖZÇELİK ENDÜSTRİ", layout="wide", page_icon="🏭")
 
-# --- CSS (NET SİYAH YAZILAR) ---
+# --- CSS (KESİN BEYAZ YAZI + INPUT DÜZELTME) ---
 st.markdown("""
     <style>
-    /* GENEL YAZILAR BEYAZ (Koyu modda görünsün diye) */
+    /* Ana Başlıklar ve Yazılar BEYAZ */
     .main-header, h1, h2, h3, h4, h5, h6, p, label, .stMarkdown {
         color: #ffffff !important;
     }
     
-    /* SONUÇ KARTLARI ÖZEL: İÇİ BEYAZ, YAZISI SİYAH */
+    /* Input (Giriş) Kutularının İçi */
+    input {
+        color: #000000 !important; /* Yazdığın rakam siyah olsun */
+        background-color: #ffffff !important;
+    }
+    
+    /* Selectbox (Açılır Kutu) Yazıları */
+    div[data-baseweb="select"] span {
+        color: #000000 !important;
+    }
+    
+    /* SONUÇ KARTLARI */
     div[data-testid="metric-container"] {
         background-color: #ffffff !important;
         border: 1px solid #cccccc !important;
@@ -42,9 +53,6 @@ st.markdown("""
         color: #000000 !important; /* Rakam Siyah */
     }
     
-    /* Input kutusu içi siyah olsun */
-    input { color: #000000 !important; }
-    
     .stButton>button {width: 100%; border-radius: 5px; font-weight: bold;}
     </style>
 """, unsafe_allow_html=True)
@@ -56,26 +64,59 @@ def get_repo():
     return Github(token).get_repo(repo_name)
 
 def load_data(filename):
-    """Veriyi okur"""
+    """Veriyi okur ve SÜTUNLARI ZORLA DÜZELTİR"""
     try:
         repo = get_repo()
         content = repo.get_contents(filename).decoded_content.decode()
         df = pd.read_csv(io.StringIO(content))
         
-        # Sütun Düzeltmeleri
-        if "malz" in filename:
-            rename_map = {"Malzeme": "Ad", "Birim Fiyat": "Fiyat", "Yoğunluk": "Yog"}
-            df.rename(columns=rename_map, inplace=True)
-            if "Ad" not in df.columns: df["Ad"] = "Siyah Sac"
-            if "Fiyat" not in df.columns: df["Fiyat"] = 30.0
-            if "Yog" not in df.columns: df["Yog"] = 7.85
+        # --- HATA ÖNLEYİCİ BLOK ---
+        # 1. Müşteri Dosyası Kontrolü
+        if "musteri" in filename:
+            # Eski sütun isimleri varsa yenisine çevir
+            rename_dict = {
+                "Firma Adı": "Firma", 
+                "Müşteri Adı": "Firma",
+                "Yetkili Kişi": "Yetkili",
+                "Telefon": "Tel"
+            }
+            df.rename(columns=rename_dict, inplace=True)
             
+            # Eğer hala "Firma" sütunu yoksa, dosya bozuktur veya boştur.
+            # Manuel olarak sütunları biz ekleyelim.
+            if "Firma" not in df.columns:
+                # Eğer veri varsa ama sütun adı yanlışsa ilk sütunu Firma yap
+                if not df.empty:
+                    df["Firma"] = df.iloc[:, 0] # İlk sütunu kopyala
+                else:
+                    return pd.DataFrame(columns=["Firma", "Yetkili", "Tel", "Adres"])
+            
+            # Eksik yan sütunları tamamla
+            for col in ["Yetkili", "Tel", "Adres"]:
+                if col not in df.columns: df[col] = "-"
+
+        # 2. Sipariş Dosyası Kontrolü
+        if "siparis" in filename:
+            rename_dict = {"İş Adı": "İş", "Müşteri Adı": "Müşteri"}
+            df.rename(columns=rename_dict, inplace=True)
+            if "Müşteri" not in df.columns:
+                 if not df.empty: df["Müşteri"] = df.iloc[:, 1] # Tahmini
+                 else: return pd.DataFrame(columns=["Tarih", "Müşteri", "İş", "Tutar", "Detay"])
+
+        # 3. Malzeme Dosyası Kontrolü
+        if "malz" in filename:
+            rename_dict = {"Malzeme": "Ad", "Birim Fiyat": "Fiyat", "Yoğunluk": "Yog"}
+            df.rename(columns=rename_dict, inplace=True)
+            if "Ad" not in df.columns: return pd.DataFrame([{"Ad":"Siyah Sac", "Fiyat":30.0, "Yog":7.85}])
+
         return df
     except:
-        # Varsayılanlar
+        # Dosya yoksa sıfırdan oluştur
+        if "musteri" in filename: return pd.DataFrame(columns=["Firma", "Yetkili", "Tel", "Adres"])
+        if "siparis" in filename: return pd.DataFrame(columns=["Tarih", "Müşteri", "İş", "Tutar", "Detay"])
         if "ayar" in filename: return pd.DataFrame([
-            {"Key":"dolar", "Val":34.50}, {"Key":"kar", "Val":25.0}, 
-            {"Key":"kdv", "Val":20.0}, {"Key":"lazer_dk", "Val":25.0}, {"Key":"abkant", "Val":15.0}
+            {"Key":"kar", "Val":25.0}, {"Key":"kdv", "Val":20.0}, 
+            {"Key":"lazer_dk", "Val":25.0}, {"Key":"abkant", "Val":15.0}
         ])
         if "malz" in filename: return pd.DataFrame([
             {"Ad":"Siyah Sac", "Fiyat":32.0, "Yog":7.85},
@@ -86,8 +127,6 @@ def load_data(filename):
             {"Ad":"Hardox 450", "Fiyat":120.0, "Yog":7.85},
             {"Ad":"Hardox 500", "Fiyat":150.0, "Yog":7.85}
         ])
-        if "siparis" in filename: return pd.DataFrame(columns=["Tarih", "Müşteri", "İş Adı", "Tutar", "Detay"])
-        if "musteri" in filename: return pd.DataFrame(columns=["Firma", "Yetkili", "Tel", "Adres"])
         return pd.DataFrame()
 
 def save_data(filename, df):
@@ -99,8 +138,7 @@ def save_data(filename, df):
     except:
         repo.create_file(filename, "New", df.to_csv(index=False))
 
-# --- AYARLARI ÇEK (EN BAŞTA) ---
-# Session State kontrolünü en tepeye aldık ki hata vermesin
+# --- AYARLARI ÇEK ---
 if 'db_ayar' not in st.session_state:
     st.session_state.db_ayar = load_data("ayarlar.csv")
     
@@ -191,12 +229,10 @@ with st.sidebar:
     st.write(f"✂️ **Lazer:** {LAZER_DK} TL/dk")
     st.write(f"📐 **Büküm:** {ABKANT_TL} TL/vuruş")
     
-    # MALZEME FİYATLARI LİSTESİ
     st.markdown("---")
     st.markdown("**🏗️ Malzeme (TL/Kg)**")
     
     if 'db_malz' in st.session_state and not st.session_state.db_malz.empty:
-        # Tüm malzemeleri döngüyle yazdır
         for index, row in st.session_state.db_malz.iterrows():
             st.write(f"▪️ **{row['Ad']}:** {row['Fiyat']} TL")
     else:
@@ -206,11 +242,12 @@ with st.sidebar:
 # 1. HESAPLAMA
 # ==================================================
 if menu == "Hesaplama":
-    st.header("Teklif Hesaplayıcı")
+    st.markdown('<p class="main-header">Teklif Hesaplayıcı</p>', unsafe_allow_html=True)
     
-    # MÜŞTERİ SEÇİMİ
+    # Müşteri Seçimi
     df_mus = load_data("musteriler.csv")
     kayitli_list = []
+    # Güvenli Kontrol
     if not df_mus.empty and "Firma" in df_mus.columns:
         kayitli_list = df_mus["Firma"].tolist()
     
@@ -234,17 +271,16 @@ if menu == "Hesaplama":
 
     st.divider()
 
-    # GİRİŞ ALANI
+    # Giriş Alanı
     with st.expander("➕ Parça Ekle (Manuel & Word & Resim)", expanded=True):
         tab_man, tab_dos = st.tabs(["✍️ Manuel", "📂 Dosya"])
         
         with tab_man:
             c1, c2, c3 = st.columns(3)
-            # Malzeme listesi
             malz_opt = ["Siyah Sac"]
-            if 'db_malz' in st.session_state and "Ad" in st.session_state.db_malz.columns:
+            if "Ad" in st.session_state.db_malz.columns:
                 malz_opt = st.session_state.db_malz["Ad"].tolist()
-                
+            
             i_malz = c1.selectbox("Malzeme", malz_opt)
             i_kal = c2.number_input("Kalınlık (mm)", value=None, placeholder="2")
             i_adet = c3.number_input("Adet", value=None, min_value=1, placeholder="1")
@@ -275,18 +311,24 @@ if menu == "Hesaplama":
             if st.button("Analiz Et ve Ekle"):
                 for f in files:
                     vals = {}
-                    if f.name.endswith('.docx'): vals = analiz_et(f, "docx")
-                    else: vals = analiz_et(f, "img")
+                    if f.name.endswith('.docx'):
+                        vals = analiz_et(f, "docx")
+                    else:
+                        vals = analiz_et(f, "img")
                     st.session_state.sepet.append({
                         "Malzeme": vals.get("malz", "Siyah Sac"),
                         "Kalınlık": vals.get("kal", 2.0),
-                        "En": vals.get("y", 1000.0), "Boy": vals.get("x", 2000.0),
-                        "Adet": 1, "Süre": vals.get("sure", 0.0), "Büküm": 0, "Sil": False
+                        "En": vals.get("y", 1000.0),
+                        "Boy": vals.get("x", 2000.0),
+                        "Adet": 1,
+                        "Süre": vals.get("sure", 0.0),
+                        "Büküm": 0,
+                        "Sil": False
                     })
                 st.success("Eklendi")
                 st.rerun()
 
-    # SEPET
+    # Sepet
     if st.session_state.sepet:
         st.markdown("### 🛒 Liste")
         df_sepet = pd.DataFrame(st.session_state.sepet)
@@ -299,7 +341,6 @@ if menu == "Hesaplama":
                 "Sil": st.column_config.CheckboxColumn("Sil?", width="small"),
                 "En": st.column_config.NumberColumn("En (mm)", format="%.1f"),
                 "Boy": st.column_config.NumberColumn("Boy (mm)", format="%.1f"),
-                "Kalınlık": st.column_config.NumberColumn("Kal (mm)", format="%.1f"),
             }
         )
         
@@ -309,21 +350,21 @@ if menu == "Hesaplama":
             toplam_tl = 0
             toplam_kg = 0
             
-            # Veritabanını indexle
             try:
                 df_m = st.session_state.db_malz.set_index("Ad")
             except:
-                st.error("Veritabanı yüklenemedi.")
+                st.error("Malzeme veritabanı hatası.")
                 st.stop()
             
             for item in final_sepet:
                 try:
+                    # Malzeme Fiyatını Al (Sadece TL)
                     if item["Malzeme"] in df_m.index:
                         m_info = df_m.loc[item["Malzeme"]]
                         m_fiyat = float(m_info["Fiyat"])
                         m_yog = float(m_info["Yog"])
                     else:
-                        m_fiyat = 32.0
+                        m_fiyat = 30.0
                         m_yog = 7.85
                     
                     hacim = item["En"] * item["Boy"] * item["Kalınlık"]
@@ -346,21 +387,30 @@ if menu == "Hesaplama":
             res = st.session_state.sonuc
             st.divider()
             c1, c2, c3 = st.columns(3)
-            c1.metric("Toplam Ağırlık", f"{res['kg']:.1f} kg")
+            c1.metric("Ağırlık", f"{res['kg']:.1f} kg")
             c2.metric("Maliyet", f"{res['ham']:,.0f} TL")
             c3.metric("TEKLİF (+KDV)", f"{res['son']:,.0f} TL")
             
             st.divider()
+            
+            # KAYDETME
             c_save, c_clear = st.columns([2,1])
             not_txt = c_save.text_input("İş Notu:")
             
             if c_save.button("💾 MÜŞTERİYE KAYDET"):
                 with st.spinner("Kaydediliyor..."):
+                    # 1. Müşteriyi Kaydet (Eğer yoksa)
                     df_m = load_data("musteriler.csv")
+                    
+                    # BURADA HATA OLMASIN DİYE KONTROL EDİYORUZ
+                    if "Firma" not in df_m.columns:
+                        df_m["Firma"] = [] # Boşsa oluştur
+                        
                     if aktif_musteri not in df_m["Firma"].values:
                         new_m = pd.DataFrame([{"Firma": aktif_musteri, "Yetkili": "-", "Tel": "-", "Adres": "-"}])
                         save_data("musteriler.csv", pd.concat([df_m, new_m], ignore_index=True))
                     
+                    # 2. Siparişi Kaydet
                     df_s = load_data("siparisler.csv")
                     new_s = pd.DataFrame([{
                         "Tarih": datetime.now().strftime("%d-%m-%Y %H:%M"),
@@ -433,8 +483,7 @@ elif menu == "Ayarlar":
         if st.button("Ayarları Kaydet"):
             new_df = pd.DataFrame([
                 {"Key":"kar", "Val":n_kar}, {"Key":"kdv", "Val":n_kdv}, 
-                {"Key":"lazer_dk", "Val":n_lazer}, {"Key":"abkant", "Val":n_abkant},
-                {"Key":"dolar", "Val":st.session_state.canli_dolar}
+                {"Key":"lazer_dk", "Val":n_lazer}, {"Key":"abkant", "Val":n_abkant}
             ])
             save_data("ayarlar.csv", new_df)
             del st.session_state.db_ayar
@@ -442,19 +491,17 @@ elif menu == "Ayarlar":
             st.rerun()
 
     with tab2:
-        if 'db_malz' in st.session_state:
-            df_m = st.session_state.db_malz
-            edited = st.data_editor(
-                df_m, 
-                num_rows="dynamic", 
-                use_container_width=True,
-                column_config={
-                    "Fiyat": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f")
-                }
-            )
-            if st.button("Malzemeleri Kaydet"):
-                # Session State'i güncelle
-                st.session_state.db_malz = edited
-                save_data("malzemeler.csv", edited)
-                st.success("Güncellendi!")
-                st.rerun()
+        df_m = st.session_state.db_malz
+        edited = st.data_editor(
+            df_m, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config={
+                "Fiyat": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f")
+            }
+        )
+        if st.button("Malzemeleri Kaydet"):
+            save_data("malzemeler.csv", edited)
+            del st.session_state.db_malz
+            st.success("Güncellendi!")
+            st.rerun()
