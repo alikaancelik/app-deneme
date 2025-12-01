@@ -1,8 +1,9 @@
 streamlit
 pandas
-python-docx
-pillow
-pytesseract
+gspread
+oauth2client
 opencv-python-headless
+pytesseract
+pillow
+python-docx
 numpy
-openpyxl
