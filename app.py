@@ -10,13 +10,19 @@ import os
 from datetime import datetime
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Lazer Atölye Yönetimi", layout="wide", page_icon="🏭")
+st.set_page_config(page_title="Pro Lazer Atölyesi", layout="wide", page_icon="🏭")
 
 # --- GLOBAL DEĞİŞKENLER VE SESSION STATE ---
 if 'malzeme_db' not in st.session_state:
+    # Başlangıç veritabanı (İstediğin yeni malzemeler eklendi)
     st.session_state.malzeme_db = {
         "DKP": {"fiyat": 0.90, "birim": "USD", "yogunluk": 7.85},
-        "Paslanmaz": {"fiyat": 3.50, "birim": "USD", "yogunluk": 7.9},
+        "Siyah Sac": {"fiyat": 0.85, "birim": "USD", "yogunluk": 7.85},
+        "ST37": {"fiyat": 0.85, "birim": "USD", "yogunluk": 7.85},
+        "S235JR": {"fiyat": 0.88, "birim": "USD", "yogunluk": 7.85},
+        "Galvaniz": {"fiyat": 1.00, "birim": "USD", "yogunluk": 7.85},
+        "Paslanmaz (304)": {"fiyat": 3.50, "birim": "USD", "yogunluk": 7.9},
+        "Paslanmaz (316)": {"fiyat": 4.50, "birim": "USD", "yogunluk": 8.0},
         "Alüminyum": {"fiyat": 3.00, "birim": "USD", "yogunluk": 2.7}
     }
 
@@ -62,7 +68,10 @@ def ayarlari_ac():
     
     # 2. Malzeme Fiyatları
     st.subheader("Malzeme Fiyatları")
-    for malz, detay in st.session_state.malzeme_db.items():
+    # Malzemeleri alfabetik sıraya göre gösterelim ki karışmasın
+    sirali_malzemeler = sorted(st.session_state.malzeme_db.items())
+    
+    for malz, detay in sirali_malzemeler:
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
             st.write(f"**{malz}**")
@@ -104,7 +113,7 @@ def kayit_ekle(musteri, is_adi, malzeme, tutar, durum):
     df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
     df.to_csv("teklifler.csv", index=False)
 
-# OCR ve Analiz Fonksiyonları (Önceki koddan miras)
+# OCR ve Analiz Fonksiyonları
 def sureyi_dakikaya_cevir(zaman_str):
     try:
         if not zaman_str: return 0.0
@@ -136,15 +145,16 @@ def analiz_et(text):
     if fire_match: veriler["fire"] = float(fire_match.group(1).replace(',', '.'))
     
     text_lower = text.lower()
-    if any(x in text_lower for x in ["dkp", "steel", "siyah"]): veriler["malzeme"] = "DKP"
-    elif any(x in text_lower for x in ["paslanmaz", "inox", "304"]): veriler["malzeme"] = "Paslanmaz"
+    # Malzeme tahmin listesini genişlettik
+    if any(x in text_lower for x in ["dkp", "siyah", "hr", "s235", "st37"]): veriler["malzeme"] = "S235JR"
+    elif any(x in text_lower for x in ["galvaniz", "dx51"]): veriler["malzeme"] = "Galvaniz"
+    elif any(x in text_lower for x in ["paslanmaz", "inox", "304"]): veriler["malzeme"] = "Paslanmaz (304)"
     elif any(x in text_lower for x in ["alu", "alüminyum"]): veriler["malzeme"] = "Alüminyum"
     
     return veriler
 
 # --- ANA UYGULAMA ---
 
-# Üst Bar ve Ayarlar Butonu
 col_head1, col_head2 = st.columns([5, 1])
 with col_head1:
     st.title("🏭 Lazer Kesim & Teklif Sistemi")
@@ -154,14 +164,10 @@ with col_head2:
 
 st.info(f"💵 Güncel Dolar Kuru: **{st.session_state.dolar_kuru:.4f} TL**")
 
-# Sekmeler
 tab_hesap, tab_gecmis = st.tabs(["📝 Yeni Hesaplama", "🗂️ Kayıtlar & Müşteriler"])
 
 with tab_hesap:
-    # Dosya Yükleme Alanı
     uploaded_file = st.file_uploader("Rapor Yükle (Word veya Resim)", type=['docx', 'png', 'jpg', 'jpeg'])
-    
-    # Varsayılanlar
     v = {"sure": 0.0, "x": 0.0, "y": 0.0, "kalinlik": 2.0, "adet": 1, "fire": 0.0, "malzeme": "DKP"}
     
     if uploaded_file:
@@ -183,22 +189,37 @@ with tab_hesap:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        secilen_malzeme = st.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=["DKP", "Paslanmaz", "Alüminyum"].index(v["malzeme"]) if v["malzeme"] in st.session_state.malzeme_db else 0)
+        # Yeni malzemeler listeye geldi
+        secilen_malzeme = st.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=0)
         kalinlik = st.number_input("Kalınlık (mm)", value=float(v["kalinlik"] if v["kalinlik"]>0 else 2.0))
         adet = st.number_input("Plaka/Parça Adeti", value=int(v["adet"]))
         
     with col2:
-        x_boyut = st.number_input("Kullanılan X (mm)", value=float(v["x"]))
-        y_boyut = st.number_input("Kullanılan Y (mm)", value=float(v["y"]))
-        fire_orani = st.number_input("Fire Oranı (%)", value=float(v["fire"]))
+        # BİRİM SEÇİMİ EKLENDİ
+        birim = st.radio("Ölçü Birimi", ["mm", "cm", "m"], horizontal=True)
         
+        # Kullanıcı ne seçerse seçsin biz onu etikette gösterelim
+        x_input = st.number_input(f"Kullanılan X ({birim})", value=float(v["x"]))
+        y_input = st.number_input(f"Kullanılan Y ({birim})", value=float(v["y"]))
+        
+        # Arka planda hepsini mm'ye çevirelim ki formüller bozulmasın
+        if birim == "cm":
+            x_mm = x_input * 10
+            y_mm = y_input * 10
+        elif birim == "m":
+            x_mm = x_input * 1000
+            y_mm = y_input * 1000
+        else: # zaten mm
+            x_mm = x_input
+            y_mm = y_input
+
     with col3:
+        fire_orani = st.number_input("Fire Oranı (%)", value=float(v["fire"]))
         kesim_suresi = st.number_input("Kesim Süresi (dk)", value=float(v["sure"]))
         ekstra_tl = st.number_input("Ekstra Gider (TL)", value=0.0)
         kar_marji = st.slider("Kâr Marjı (%)", 0, 100, 25)
 
     # HESAPLAMA MOTORU
-    # 1. Malzeme Fiyatını Bul ve TL'ye Çevir
     malzeme_bilgi = st.session_state.malzeme_db[secilen_malzeme]
     birim_fiyat = malzeme_bilgi['fiyat']
     
@@ -207,13 +228,12 @@ with tab_hesap:
     else:
         birim_fiyat_tl = birim_fiyat
         
-    # 2. Ağırlık ve Maliyet
+    # Ağırlık (mm cinsinden hesaplıyoruz)
     yogunluk = malzeme_bilgi['yogunluk']
-    hacim_mm3 = x_boyut * y_boyut * kalinlik
+    hacim_mm3 = x_mm * y_mm * kalinlik
     agirlik_kg = (hacim_mm3 * yogunluk) / 1_000_000
     toplam_kg = agirlik_kg * adet
     
-    # Fire Hesabı
     fire_carpan = 1 / (1 - (fire_orani/100)) if fire_orani < 100 else 1
     
     malzeme_maliyeti = toplam_kg * birim_fiyat_tl * fire_carpan
@@ -236,7 +256,7 @@ with tab_hesap:
         with kc1:
             musteri_adi = st.text_input("Firma / Müşteri Adı", placeholder="Boş ise 'Ayaklı Müşteri'")
         with kc2:
-            is_adi = st.text_input("İşin Adı / Tanımı", placeholder="Örn: 2mm DKP Flanş Kesimi")
+            is_adi = st.text_input("İşin Adı / Tanımı", placeholder="Örn: 2mm ST37 Flanş")
         with kc3:
             kaydet_btn = st.button("Sisteme Kaydet", type="primary")
             
@@ -248,7 +268,6 @@ with tab_gecmis:
     st.header("🗂️ Müşteri ve İş Kayıtları")
     df = kayitlari_yukle()
     
-    # Filtreleme
     firmalar = ["Tümü"] + list(df["Musteri"].unique()) if not df.empty else ["Tümü"]
     secilen_firma = st.selectbox("Firmaya Göre Filtrele", firmalar)
     
@@ -259,11 +278,8 @@ with tab_gecmis:
         
     st.dataframe(gosterilecek_df, use_container_width=True)
     
-    # İstatistik
     if not gosterilecek_df.empty:
         toplam_is_hacmi = gosterilecek_df["Tutar"].sum()
         st.caption(f"Görüntülenen Toplam İş Hacmi: {toplam_is_hacmi:,.2f} TL")
-        
-        # Excel İndir
         with open("teklifler.csv", "rb") as file:
             st.download_button("Excel/CSV Olarak İndir", file, "teklifler.csv")
