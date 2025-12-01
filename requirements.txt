@@ -1,9 +1,9 @@
 streamlit
 pandas
-gspread
-oauth2client
+PyGithub
 opencv-python-headless
 pytesseract
 pillow
 python-docx
 numpy
+requests
