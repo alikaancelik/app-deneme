@@ -2,99 +2,153 @@ import streamlit as st
 import pandas as pd
 
 # Sayfa Ayarları
-st.set_page_config(page_title="Lazer & Abkant Hesaplayıcı", layout="wide")
+st.set_page_config(page_title="Pro Lazer Teklif", layout="wide", page_icon="🏭")
 
-# --- SOL MENÜ (AYARLAR) ---
-st.sidebar.header("⚙️ Birim Fiyat Ayarları")
-st.sidebar.info("Buradaki fiyatları piyasaya göre güncelleyebilirsiniz.")
-
-# Malzeme KG Fiyatları (Örnek Dolar/TL bazlı olabilir, burası TL varsayıldı)
-dkp_fiyat = st.sidebar.number_input("DKP Sac (TL/kg)", value=30.0)
-paslanmaz_fiyat = st.sidebar.number_input("Paslanmaz (TL/kg)", value=120.0)
-alu_fiyat = st.sidebar.number_input("Alüminyum (TL/kg)", value=90.0)
-
-st.sidebar.markdown("---")
-# İşçilik Fiyatları
-lazer_dakika_ucreti = st.sidebar.number_input("Lazer Kesim (TL/dk)", value=15.0)
-abkant_bukum_ucreti = st.sidebar.number_input("Büküm Başına Ücret (TL)", value=5.0)
-kaynak_saat_ucreti = st.sidebar.number_input("Kaynak İşçiliği (TL/saat)", value=250.0)
-
-# --- ANA SAYFA ---
-st.title("🏭 Metal İşleme Teklif Hesaplayıcı")
-st.markdown("Malzeme özelliklerini ve işlem detaylarını girerek tahmini maliyet oluşturun.")
-
-# 1. Bölüm: Malzeme Seçimi
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("1. Malzeme Bilgileri")
-    malzeme_turu = st.selectbox("Malzeme Türü", ["DKP", "Paslanmaz (304)", "Alüminyum"])
+# --- VERİ TABANI (BURAYI KENDİ MAKİNENE GÖRE GÜNCELLEYEBİLİRSİN) ---
+# Buradaki hızlar (mm/dk) temsilidir. Kendi makinenin değerlerini buraya yazmalısın.
+kesim_verileri = [
+    {"malzeme": "DKP", "kalinlik": 1.0, "hiz": 25000, "gaz": "O2"},
+    {"malzeme": "DKP", "kalinlik": 2.0, "hiz": 18000, "gaz": "O2"},
+    {"malzeme": "DKP", "kalinlik": 3.0, "hiz": 12000, "gaz": "O2"},
+    {"malzeme": "DKP", "kalinlik": 5.0, "hiz": 6000, "gaz": "O2"},
+    {"malzeme": "DKP", "kalinlik": 10.0, "hiz": 1800, "gaz": "O2"},
     
-    # Malzeme Yoğunlukları (g/cm3)
-    yogunluklar = {"DKP": 7.85, "Paslanmaz (304)": 7.9, "Alüminyum": 2.7}
-    secilen_yogunluk = yogunluklar[malzeme_turu]
+    {"malzeme": "Paslanmaz (304)", "kalinlik": 1.0, "hiz": 20000, "gaz": "N2"},
+    {"malzeme": "Paslanmaz (304)", "kalinlik": 2.0, "hiz": 12000, "gaz": "N2"},
+    {"malzeme": "Paslanmaz (304)", "kalinlik": 5.0, "hiz": 3500, "gaz": "N2"},
     
-    kalinlik = st.number_input("Sac Kalınlığı (mm)", min_value=0.5, value=2.0, step=0.5)
-    en = st.number_input("Parça Eni (mm)", value=100.0)
-    boy = st.number_input("Parça Boyu (mm)", value=200.0)
-    adet = st.number_input("Kaç Adet Üretilecek?", min_value=1, value=1, step=1)
+    {"malzeme": "Alüminyum", "kalinlik": 2.0, "hiz": 15000, "gaz": "N2"},
+    {"malzeme": "Alüminyum", "kalinlik": 5.0, "hiz": 5000, "gaz": "N2"},
+]
+df_hiz = pd.DataFrame(kesim_verileri)
 
-# Ağırlık Hesabı
-hacim_mm3 = en * boy * kalinlik
-agirlik_kg_tek = (hacim_mm3 * secilen_yogunluk) / 1_000_000 # mm3'ten kg'a çevirim
-toplam_agirlik = agirlik_kg_tek * adet
+# --- SOL MENÜ: FİYATLANDIRMA PARAMETRELERİ ---
+st.sidebar.title("⚙️ Parametreler")
 
-# Malzeme Maliyeti Hesabı
-birim_kg_fiyat = 0
-if malzeme_turu == "DKP": birim_kg_fiyat = dkp_fiyat
-elif malzeme_turu == "Paslanmaz (304)": birim_kg_fiyat = paslanmaz_fiyat
-else: birim_kg_fiyat = alu_fiyat
+with st.sidebar.expander("Döviz & Kurlar", expanded=True):
+    dolar_kuru = st.number_input("Dolar Kuru (TL)", value=32.0)
+    euro_kuru = st.number_input("Euro Kuru (TL)", value=34.5)
 
-malzeme_maliyeti = toplam_agirlik * birim_kg_fiyat
+with st.sidebar.expander("Malzeme Kg Fiyatları ($)", expanded=False):
+    st.info("Fiyatları DOLAR ($) cinsinden giriniz.")
+    fiyat_dkp = st.number_input("DKP ($/kg)", value=0.90)
+    fiyat_paslanmaz = st.number_input("Paslanmaz 304 ($/kg)", value=3.50)
+    fiyat_alu = st.number_input("Alüminyum ($/kg)", value=3.00)
 
-with col2:
-    st.subheader("2. İşlem Bilgileri")
-    kesim_uzunlugu = st.number_input("Toplam Kesim Yolu (mm)", value=(en+boy)*2, help="Lazerin toplam gezeceği mesafe")
-    delik_sayisi = st.number_input("Patlatma/Delik Sayısı", value=0)
-    bukum_sayisi = st.number_input("Büküm Sayısı (Parça Başı)", value=2)
-    kaynak_suresi = st.number_input("Kaynak Süresi (Dakika/Parça)", value=0)
+with st.sidebar.expander("İşçilik Ücretleri (TL)", expanded=False):
+    lazer_dk_ucret = st.number_input("Lazer Dakika (TL)", value=20.0)
+    abkant_vurus = st.number_input("Abkant Vuruş Başı (TL)", value=10.0)
+    kaynak_saat = st.number_input("Kaynakçılık (TL/Saat)", value=350.0)
+    boya_m2 = st.number_input("Boya (TL/m²)", value=150.0)
 
-# Lazer Süre Tahmini (Basit bir mantık: Kalınlık arttıkça hız düşer)
-# Bu formül çok basittir, makinenizin gerçek verilerine göre güncellenebilir.
-tahmini_hiz_mm_dk = 10000 / kalinlik # mm/dk (Örnek formül)
-kesim_suresi_dk = (kesim_uzunlugu / tahmini_hiz_mm_dk) + (delik_sayisi * 0.05) # her delik 3 saniye ekler
-toplam_lazer_maliyeti = kesim_suresi_dk * lazer_dakika_ucreti * adet
-
-# Büküm Maliyeti
-toplam_bukum_maliyeti = bukum_sayisi * abkant_bukum_ucreti * adet
-
-# Kaynak Maliyeti
-toplam_kaynak_maliyeti = (kaynak_suresi / 60) * kaynak_saat_ucreti * adet
-
-# --- SONUÇ EKRANI ---
+# --- ANA EKRAN ---
+st.title("🏭 Profesyonel Maliyet Hesaplayıcı")
 st.markdown("---")
-st.header("💰 Maliyet Özeti")
 
-toplam_maliyet = malzeme_maliyeti + toplam_lazer_maliyeti + toplam_bukum_maliyeti + toplam_kaynak_maliyeti
+# Sekmeli yapı
+tab1, tab2, tab3 = st.tabs(["📝 Parça Bilgileri", "🔧 Ek İşlemler", "💰 Sonuç & Teklif"])
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Toplam Ağırlık", f"{toplam_agirlik:.2f} kg")
-c2.metric("Parça Başı Maliyet", f"{toplam_maliyet / adet:.2f} TL")
-c3.metric("TOPLAM TUTAR", f"{toplam_maliyet:.2f} TL", delta_color="inverse")
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Malzeme Seçimi")
+        secilen_malzeme = st.selectbox("Malzeme Türü", ["DKP", "Paslanmaz (304)", "Alüminyum"])
+        
+        # Seçilen malzemeye uygun kalınlıkları getir
+        uygun_kalinliklar = df_hiz[df_hiz["malzeme"] == secilen_malzeme]["kalinlik"].unique()
+        uygun_kalinliklar.sort()
+        
+        secilen_kalinlik = st.selectbox("Kalınlık (mm)", uygun_kalinliklar)
+        
+        # Seçilen özelliklere göre hızı bul
+        bulunan_veri = df_hiz[(df_hiz["malzeme"] == secilen_malzeme) & (df_hiz["kalinlik"] == secilen_kalinlik)].iloc[0]
+        hiz_mm_dk = bulunan_veri["hiz"]
+        st.caption(f"⚡ Makine Veritabanı Hızı: **{hiz_mm_dk} mm/dk** (Gaz: {bulunan_veri['gaz']})")
 
-# Detay Tablosu
-st.subheader("Maliyet Dağılımı")
-data = {
-    "Kalem": ["Malzeme", "Lazer Kesim", "Abkant Büküm", "Kaynak İşçiliği"],
-    "Tutar (TL)": [malzeme_maliyeti, toplam_lazer_maliyeti, toplam_bukum_maliyeti, toplam_kaynak_maliyeti]
-}
-df = pd.DataFrame(data)
-st.bar_chart(df.set_index("Kalem"))
-st.table(df)
+    with col2:
+        st.subheader("Boyutlar")
+        en = st.number_input("En (mm)", value=200)
+        boy = st.number_input("Boy (mm)", value=300)
+        adet = st.number_input("Adet", value=1, min_value=1)
+        
+        # Otomatik kesim yolu tahmini (Çevre + %20 iç delikler payı)
+        tahmini_cevre = (en + boy) * 2
+        kesim_yolu = st.number_input("Kesim Yolu (mm)", value=int(tahmini_cevre * 1.2), help="Otomatik olarak çevre x 1.2 hesaplandı, değiştirebilirsiniz.")
+        patlatma_sayisi = st.number_input("Patlatma (Giriş) Sayısı", value=1)
 
-# Kar Marjı Ekleme
-st.markdown("---")
-kar_orani = st.slider("Kar Marjı (%)", 0, 100, 20)
-satis_fiyati = toplam_maliyet * (1 + kar_orani/100)
+with tab2:
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Büküm & Kaynak")
+        bukum_sayisi = st.number_input("Parça Başı Büküm Sayısı", value=0)
+        kaynak_dk = st.number_input("Parça Başı Kaynak Süresi (dk)", value=0.0)
+    
+    with c2:
+        st.subheader("Diğer")
+        boya_var_mi = st.checkbox("Elektrostatik Boya İstiyor mu?")
+        boyanacak_alan_m2 = (en * boy * 2) / 1_000_000 if boya_var_mi else 0 # Çift yüzey hesap
+        if boya_var_mi:
+            st.info(f"Tahmini Boya Alanı: {boyanacak_alan_m2:.3f} m² (Çift Yüz)")
 
-st.success(f"✅ **Önerilen Satış Fiyatı (%{kar_orani} Kar Dahil): {satis_fiyati:.2f} TL**")
+# --- HESAPLAMALAR ---
+
+# 1. Ağırlık ve Malzeme
+yogunluklar = {"DKP": 7.85, "Paslanmaz (304)": 7.9, "Alüminyum": 2.7}
+yogunluk = yogunluklar[secilen_malzeme]
+hacim_cm3 = (en * boy * secilen_kalinlik) / 1000 
+tek_agirlik_kg = hacim_cm3 * yogunluk / 1000
+toplam_agirlik = tek_agirlik_kg * adet
+
+# Malzeme Fiyat Seçimi
+if secilen_malzeme == "DKP": birim_usd = fiyat_dkp
+elif secilen_malzeme == "Paslanmaz (304)": birim_usd = fiyat_paslanmaz
+else: birim_usd = fiyat_alu
+
+malzeme_maliyeti_tl = toplam_agirlik * birim_usd * dolar_kuru
+
+# 2. Lazer Kesim Maliyeti
+# Zaman = (Yol / Hız) + (Patlatma * süre)
+kesim_suresi_dk = (kesim_yolu / hiz_mm_dk) + (patlatma_sayisi * (3/60)) # her patlatma 3 saniye
+lazer_maliyeti_tl = kesim_suresi_dk * lazer_dk_ucret * adet
+
+# 3. İşçilikler
+bukum_maliyeti_tl = bukum_sayisi * abkant_vurus * adet
+kaynak_maliyeti_tl = (kaynak_dk / 60) * kaynak_saat * adet
+boya_maliyeti_tl = boyanacak_alan_m2 * boya_m2 * adet if boya_var_mi else 0
+
+toplam_ham_maliyet = malzeme_maliyeti_tl + lazer_maliyeti_tl + bukum_maliyeti_tl + kaynak_maliyeti_tl + boya_maliyeti_tl
+
+with tab3:
+    st.header("Sonuç Tablosu")
+    
+    kar_orani = st.slider("Kâr Marjı (%)", 0, 100, 25)
+    satis_fiyati = toplam_ham_maliyet * (1 + kar_orani/100)
+    
+    col_res1, col_res2, col_res3 = st.columns(3)
+    col_res1.metric("Toplam Ağırlık", f"{toplam_agirlik:.2f} kg")
+    col_res2.metric("Maliyet (Kârsız)", f"{toplam_ham_maliyet:.2f} TL")
+    col_res3.metric(f"TEKLİF FİYATI (+%{kar_orani})", f"{satis_fiyati:.2f} TL", delta_color="inverse")
+    
+    st.markdown("### 📊 Maliyet Dağılımı")
+    data = {
+        "Kalem": ["Malzeme", "Lazer Kesim", "Büküm", "Kaynak", "Boya"],
+        "Tutar (TL)": [malzeme_maliyeti_tl, lazer_maliyeti_tl, bukum_maliyeti_tl, kaynak_maliyeti_tl, boya_maliyeti_tl]
+    }
+    df_sonuc = pd.DataFrame(data)
+    
+    # Basit bir bar grafik
+    st.bar_chart(df_sonuc.set_index("Kalem"))
+    
+    # Detaylı tablo
+    st.table(df_sonuc)
+    
+    if st.button("Teklif Özetini Kopyala"):
+        st.code(f"""
+        TEKLİF ÖZETİ
+        ----------------
+        Malzeme: {secilen_malzeme} {secilen_kalinlik}mm
+        Adet: {adet}
+        İşlemler: Lazer, Büküm ({bukum_sayisi}), Kaynak
+        ----------------
+        TOPLAM FİYAT: {satis_fiyati:.2f} TL + KDV
+        """, language="text")
