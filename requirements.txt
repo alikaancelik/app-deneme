@@ -4,3 +4,5 @@ python-docx
 pillow
 pytesseract
 opencv-python-headless
+requests
+openpyxl
