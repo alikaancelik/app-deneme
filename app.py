@@ -1,119 +1,84 @@
 import streamlit as st
 import pandas as pd
+from github import Github
+import numpy as np
 import cv2
 import pytesseract
 from PIL import Image
 from docx import Document
 import re
-import os
-import numpy as np
-import json
+import io
 import requests
 from datetime import datetime
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="ÖZÇELİK ENDÜSTRİ", layout="wide", page_icon="🏭")
 
-# --- ÖZEL CSS (Görünüm İyileştirme) ---
+# --- CSS İYİLEŞTİRMELERİ ---
 st.markdown("""
     <style>
-    .main-header {font-size: 30px; font-weight: bold; color: #1E3A8A;}
-    .metric-card {
-        background-color: #ffffff; 
-        padding: 15px; 
-        border-radius: 10px; 
-        border: 1px solid #ddd;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        color: #000000;
-        text-align: center;
-    }
-    .metric-value {font-size: 24px; font-weight: bold; color: #1E3A8A; margin: 0;}
-    .metric-label {font-size: 14px; color: #555; margin-bottom: 5px;}
-    /* Tablo başlıklarını düzenle */
-    th {background-color: #f0f2f6 !important;}
+    .main-header {font-size: 28px; font-weight: bold; color: #0f172a;}
+    .metric-card {background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; text-align: center;}
+    .metric-val {font-size: 24px; font-weight: bold; color: #0f172a;}
+    .stButton>button {width: 100%;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- KALICI AYARLAR (JSON SİSTEMİ) ---
-CONFIG_FILE = "config.json"
-DATA_FILE = "ozcelik_data.csv"
+# --- GITHUB VERİTABANI BAĞLANTISI ---
+# Bu fonksiyonlar dosyaları GitHub'dan okur ve yazar.
 
-DEFAULT_CONFIG = {
-    "malzemeler": {
-        "Siyah Sac": {"fiyat": 0.85, "birim": "USD", "yogunluk": 7.85},
-        "Paslanmaz": {"fiyat": 3.50, "birim": "USD", "yogunluk": 7.93},
-        "Galvaniz": {"fiyat": 1.00, "birim": "USD", "yogunluk": 7.85},
-        "ST52": {"fiyat": 0.95, "birim": "USD", "yogunluk": 7.85},
-        "Hardox 400": {"fiyat": 2.00, "birim": "USD", "yogunluk": 7.85},
-        "Hardox 450": {"fiyat": 2.20, "birim": "USD", "yogunluk": 7.85},
-        "Hardox 500": {"fiyat": 2.50, "birim": "USD", "yogunluk": 7.85},
-    },
-    "ayarlar": {
-        "lazer_dk": 25.0,
-        "abkant_bukum": 15.0,
-        "kaynak_saat": 400.0,
-        "dolar_kuru": 34.50,
-        "kar_orani": 25.0,
-        "kdv_orani": 20.0,
-        "kdv_ekle": True
-    }
-}
+def get_github_repo():
+    """GitHub reposuna bağlanır"""
+    token = st.secrets["github"]["token"]
+    repo_name = st.secrets["github"]["repo_name"]
+    g = Github(token)
+    return g.get_repo(repo_name)
 
-def ayarlari_yukle():
-    """Ayarları dosyadan yükler, yoksa varsayılanı oluşturur"""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return DEFAULT_CONFIG.copy()
-
-def ayarlari_kaydet(config):
-    """Ayarları dosyaya kalıcı olarak yazar"""
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
-
-# BAŞLANGIÇTA AYARLARI YÜKLE
-if 'config' not in st.session_state:
-    st.session_state.config = ayarlari_yukle()
-
-# Session State Tanımları
-if 'sepet' not in st.session_state: st.session_state.sepet = []
-if 'form_malz' not in st.session_state: st.session_state.form_malz = "Siyah Sac"
-if 'aktif_musteri' not in st.session_state: st.session_state.aktif_musteri = None
-
-# --- YARDIMCI FONKSİYONLAR ---
-
-def canli_dolar_cek():
-    """API'den güncel kuru çeker"""
+def read_csv_from_github(filename):
+    """GitHub'dan CSV dosyasını okur"""
     try:
-        url = "https://api.exchangerate-api.com/v4/latest/USD"
-        response = requests.get(url, timeout=2)
-        data = response.json()
-        kur = data["rates"]["TRY"]
-        return float(kur)
+        repo = get_github_repo()
+        contents = repo.get_contents(filename)
+        return pd.read_csv(io.StringIO(contents.decoded_content.decode()))
     except:
-        return None
-
-def musteri_veritabani_yukle():
-    if os.path.exists(DATA_FILE):
-        try:
-            return pd.read_csv(DATA_FILE)
-        except:
+        # Dosya yoksa boş DataFrame döndür
+        if filename == "musteriler.csv":
+            return pd.DataFrame(columns=["Firma Adı", "Yetkili", "Telefon"])
+        elif filename == "siparisler.csv":
             return pd.DataFrame(columns=["Tarih", "Müşteri", "İş Adı", "Tutar", "Detay"])
-    return pd.DataFrame(columns=["Tarih", "Müşteri", "İş Adı", "Tutar", "Detay"])
+        elif filename == "ayarlar.csv":
+            # Varsayılan Ayarlar
+            return pd.DataFrame([
+                {"Ayar": "dolar_kuru", "Deger": 34.50},
+                {"Ayar": "kar_orani", "Deger": 25.0},
+                {"Ayar": "kdv_durum", "Deger": "Evet"},
+                {"Ayar": "lazer_dk", "Deger": 25.0},
+                {"Ayar": "abkant_vurus", "Deger": 15.0}
+            ])
+        elif filename == "malzemeler.csv":
+            # Varsayılan Malzemeler
+            return pd.DataFrame([
+                {"Malzeme": "Siyah Sac", "Fiyat": 0.85, "Birim": "USD", "Yogunluk": 7.85},
+                {"Malzeme": "Paslanmaz", "Fiyat": 3.50, "Birim": "USD", "Yogunluk": 7.93},
+                {"Malzeme": "Galvaniz", "Fiyat": 1.00, "Birim": "USD", "Yogunluk": 7.85},
+                {"Malzeme": "Hardox 450", "Fiyat": 2.20, "Birim": "USD", "Yogunluk": 7.85},
+                {"Malzeme": "ST52", "Fiyat": 0.95, "Birim": "USD", "Yogunluk": 7.85}
+            ])
+        return pd.DataFrame()
 
-def is_kaydet(musteri, is_adi, tutar, detay):
-    df = musteri_veritabani_yukle()
-    yeni_kayit = {
-        "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Müşteri": musteri,
-        "İş Adı": is_adi,
-        "Tutar": round(tutar, 2),
-        "Detay": detay
-    }
-    df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
-    df.to_csv(DATA_FILE, index=False)
-    return True
+def save_csv_to_github(filename, df, message="Veri güncellendi"):
+    """DataFrame'i GitHub'a CSV olarak kaydeder"""
+    repo = get_github_repo()
+    content = df.to_csv(index=False)
+    try:
+        # Dosya varsa güncelle
+        contents = repo.get_contents(filename)
+        repo.update_file(contents.path, message, content, contents.sha)
+    except:
+        # Dosya yoksa oluştur
+        repo.create_file(filename, message, content)
 
+# --- ANALİZ MOTORU ---
 def sure_cevir(zaman_str):
     try:
         parts = list(map(int, str(zaman_str).strip().split(':')))
@@ -122,7 +87,7 @@ def sure_cevir(zaman_str):
         return 0.0
     except: return 0.0
 
-def cypcut_ocr_analiz(image):
+def cypcut_analiz(image):
     veriler = {}
     try:
         img_np = np.array(image)
@@ -131,317 +96,297 @@ def cypcut_ocr_analiz(image):
         _, img_thresh = cv2.threshold(img_gray, 150, 255, cv2.THRESH_BINARY)
         text = pytesseract.image_to_string(Image.fromarray(img_thresh))
         
-        zaman_match = re.search(r'(?:Kesim|Cut|Time).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE)
-        if zaman_match: veriler["sure"] = sure_cevir(zaman_match.group(1))
+        zaman = re.search(r'(?:Kesim|Cut|Time).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE)
+        if zaman: veriler["sure"] = sure_cevir(zaman.group(1))
         
-        x_match = re.search(r'X\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
-        y_match = re.search(r'Y\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
-        if x_match: veriler["x"] = float(x_match.group(1).replace(',', '.'))
-        if y_match: veriler["y"] = float(y_match.group(1).replace(',', '.'))
+        x = re.search(r'X\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
+        y = re.search(r'Y\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
+        if x: veriler["x"] = float(x.group(1).replace(',', '.'))
+        if y: veriler["y"] = float(y.group(1).replace(',', '.'))
         
-        fire_match = re.search(r'Fire.*?(\d+[.,]\d+)', text, re.IGNORECASE)
-        if fire_match: veriler["fire"] = float(fire_match.group(1).replace(',', '.'))
+        kal = re.search(r'x\s*(\d+[.,]?\d*)\s*$', text, re.MULTILINE)
+        if not kal: kal = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
+        if kal: veriler["kal"] = float(kal.group(1).replace(',', '.'))
         
-        kal_match = re.search(r'x\s*(\d+[.,]?\d*)\s*$', text, re.MULTILINE)
-        if not kal_match: kal_match = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
-        if kal_match: veriler["kal"] = float(kal_match.group(1).replace(',', '.'))
-
+        # Malzeme Otomatik Seçim
         tl = text.lower()
-        if "hardox" in tl:
-            if "400" in tl: veriler["malz"] = "Hardox 400"
-            elif "500" in tl: veriler["malz"] = "Hardox 500"
-            else: veriler["malz"] = "Hardox 450"
-        elif "st52" in tl: veriler["malz"] = "ST52"
-        elif "galvaniz" in tl: veriler["malz"] = "Galvaniz"
+        if "hardox" in tl: veriler["malz"] = "Hardox 450"
         elif "paslanmaz" in tl: veriler["malz"] = "Paslanmaz"
+        elif "galvaniz" in tl: veriler["malz"] = "Galvaniz"
         else: veriler["malz"] = "Siyah Sac"
-    except Exception as e: print(f"OCR: {e}")
+        
+    except: pass
     return veriler
 
-# --- SIDEBAR ---
+# --- BAŞLANGIÇ AYARLARINI ÇEK ---
+if 'ayarlar_cache' not in st.session_state:
+    st.session_state.ayarlar_cache = read_csv_from_github("ayarlar.csv")
+    st.session_state.malzeme_cache = read_csv_from_github("malzemeler.csv")
+
+# Ayarları değişkene al (Kolay kullanım için)
+df_ayar = st.session_state.ayarlar_cache
+try:
+    DOLAR = float(df_ayar.loc[df_ayar['Ayar']=='dolar_kuru', 'Deger'].values[0])
+    KAR = float(df_ayar.loc[df_ayar['Ayar']=='kar_orani', 'Deger'].values[0])
+    KDV_DURUM = str(df_ayar.loc[df_ayar['Ayar']=='kdv_durum', 'Deger'].values[0])
+    LAZER_DK = float(df_ayar.loc[df_ayar['Ayar']=='lazer_dk', 'Deger'].values[0])
+    ABKANT_TL = float(df_ayar.loc[df_ayar['Ayar']=='abkant_vurus', 'Deger'].values[0])
+except:
+    DOLAR, KAR, KDV_DURUM, LAZER_DK, ABKANT_TL = 34.50, 25.0, "Evet", 25.0, 15.0
+
+# Session State
+if 'sepet' not in st.session_state: st.session_state.sepet = []
+
+# --- ARAYÜZ ---
+
+# SOL MENÜ
 with st.sidebar:
-    st.markdown("## 🏭 ÖZÇELİK ENDÜSTRİ")
-    st.info("Lazer Kesim Yönetim Sistemi v2.0")
-    st.markdown("---")
-    secilen_sayfa = st.radio("MENÜ", ["🧮 Maliyet Hesaplama", "👥 Müşteri Veritabanı", "⚙️ Ayarlar (Kalıcı)"])
-    st.markdown("---")
+    st.image("https://ozcelikendustri.com/wp-content/uploads/2021/01/logo-1.png", width=200)
+    st.markdown("### 🏭 ÖZÇELİK ENDÜSTRİ")
+    menu = st.radio("Menü", ["Hesaplama & Teklif", "Müşteri Yönetimi", "Ayarlar & Malzemeler"])
+    
+    st.divider()
+    st.info(f"💲 Dolar: **{DOLAR} TL**\n\n📊 Kâr: **%{KAR}**")
     
     # Canlı Dolar Butonu
-    col_d1, col_d2 = st.columns([2, 1])
-    with col_d1:
-        st.metric("Dolar Kuru", f"{st.session_state.config['ayarlar']['dolar_kuru']:.2f}")
-    with col_d2:
-        if st.button("🔄", help="Kuru Güncelle"):
-            yeni_kur = canli_dolar_cek()
-            if yeni_kur:
-                st.session_state.config['ayarlar']['dolar_kuru'] = yeni_kur
-                ayarlari_kaydet(st.session_state.config)
-                st.rerun()
-            else:
-                st.error("Çekilemedi")
+    if st.button("🔄 Doları Güncelle (Netten Çek)"):
+        try:
+            r = requests.get("https://api.exchangerate-api.com/v4/latest/USD").json()
+            yeni_kur = float(r["rates"]["TRY"])
+            df_ayar.loc[df_ayar['Ayar']=='dolar_kuru', 'Deger'] = yeni_kur
+            save_csv_to_github("ayarlar.csv", df_ayar)
+            st.session_state.ayarlar_cache = df_ayar
+            st.success(f"Kur güncellendi: {yeni_kur}")
+            st.rerun()
+        except:
+            st.error("Kur çekilemedi.")
 
 # --- SAYFA 1: HESAPLAMA ---
-if secilen_sayfa == "🧮 Maliyet Hesaplama":
-    st.markdown('<div class="main-header">Teklif ve Maliyet Hesaplayıcı</div>', unsafe_allow_html=True)
+if menu == "Hesaplama & Teklif":
+    st.markdown('<p class="main-header">Teklif Masası</p>', unsafe_allow_html=True)
     
-    # Müşteri Seçimi
-    df_musteri = musteri_veritabani_yukle()
-    musteri_listesi = sorted(df_musteri["Müşteri"].unique().tolist())
+    # Müşteri Seçimi (GitHub'dan)
+    df_mus = read_csv_from_github("musteriler.csv")
+    list_mus = ["Seçiniz..."] + df_mus["Firma Adı"].tolist() if not df_mus.empty else ["Seçiniz..."]
     
     c1, c2 = st.columns([3, 1])
-    with c1:
-        secilen_musteri = st.selectbox("Müşteri Seçin:", ["-- Yeni Müşteri --"] + musteri_listesi)
-    with c2:
-        if secilen_musteri == "-- Yeni Müşteri --":
-            aktif_musteri = st.text_input("Firma Adı:", placeholder="Örn: Yılmaz Makina")
-        else:
-            aktif_musteri = secilen_musteri
-        
-        # Müşteriyi Hafızaya Al
-        if aktif_musteri:
-            st.session_state.aktif_musteri = aktif_musteri
+    secilen_firma = c1.selectbox("Müşteri Seç:", list_mus)
     
-    st.markdown("---")
+    if secilen_firma == "Seçiniz...":
+        st.warning("Lütfen işlem yapmak için müşteri seçin.")
+        st.stop()
+    
+    st.success(f"Müşteri: **{secilen_firma}**")
+    st.divider()
 
     # GİRİŞ ALANI
-    tab_dosya, tab_manuel = st.tabs(["📂 Dosya Yükle", "✍️ Manuel Giriş"])
-    
-    with tab_dosya:
-        uploaded_files = st.file_uploader("Dosyaları Sürükleyin", type=['png', 'jpg', 'jpeg', 'docx'], accept_multiple_files=True)
-        if st.button("Analiz Et ve Ekle"):
-            if uploaded_files:
-                for f in uploaded_files:
+    with st.expander("➕ Ürün Ekle (Manuel & Dosya)", expanded=True):
+        tab_man, tab_dos = st.tabs(["✍️ Manuel Ekle", "📂 Dosyadan Ekle"])
+        
+        # Manuel Giriş
+        with tab_man:
+            c1, c2, c3 = st.columns(3)
+            malz_listesi = st.session_state.malzeme_cache["Malzeme"].tolist()
+            m_malz = c1.selectbox("Malzeme", malz_listesi)
+            m_kal = c2.number_input("Kalınlık (mm)", value=None, placeholder="Örn: 2")
+            m_adet = c3.number_input("Adet", value=None, min_value=1, placeholder="1")
+            
+            c4, c5, c6 = st.columns(3)
+            birim = c4.radio("Birim", ["mm", "cm", "m"], horizontal=True)
+            m_en = c5.number_input("En", value=None, placeholder="Genişlik")
+            m_boy = c6.number_input("Boy", value=None, placeholder="Uzunluk")
+            
+            c7, c8 = st.columns(2)
+            m_sure = c7.number_input("Lazer Süresi (dk)", value=None, placeholder="0")
+            m_bukum = c8.number_input("Büküm Sayısı", value=None, placeholder="0")
+            
+            if st.button("Sepete Ekle ⬇️", key="btn_man"):
+                if m_en and m_boy and m_kal:
+                    carpan = 1000 if birim == "m" else (10 if birim == "cm" else 1)
+                    st.session_state.sepet.append({
+                        "Malzeme": m_malz,
+                        "Kalınlık": float(m_kal),
+                        "En (mm)": float(m_en) * carpan,
+                        "Boy (mm)": float(m_boy) * carpan,
+                        "Adet": int(m_adet or 1),
+                        "Süre": float(m_sure or 0),
+                        "Büküm": int(m_bukum or 0)
+                    })
+                    st.rerun()
+                else:
+                    st.error("Lütfen ölçüleri girin.")
+        
+        # Dosyadan Ekle
+        with tab_dos:
+            files = st.file_uploader("Dosyaları Sürükle", accept_multiple_files=True)
+            if st.button("Analiz Et ve Ekle"):
+                for f in files:
                     vals = {}
                     if f.name.endswith('.docx'):
                         try:
                             doc = Document(f)
-                            vals = cypcut_ocr_analiz(Image.new('RGB', (10, 10))) 
+                            vals = cypcut_analiz(Image.new('RGB',(10,10))) # Dummy
                         except: pass
                     else:
-                        vals = cypcut_ocr_analiz(Image.open(f))
+                        vals = cypcut_analiz(Image.open(f))
                     
                     st.session_state.sepet.append({
-                        "Dosya": f.name,
                         "Malzeme": vals.get("malz", "Siyah Sac"),
-                        "K (mm)": vals.get("kal", 2.0),
+                        "Kalınlık": vals.get("kal", 2.0),
                         "En (mm)": vals.get("y", 1000.0),
                         "Boy (mm)": vals.get("x", 2000.0),
                         "Adet": 1,
-                        "Süre (dk)": vals.get("sure", 0.0),
-                        "Fire (%)": vals.get("fire", 0.0),
+                        "Süre": vals.get("sure", 0.0),
                         "Büküm": 0
                     })
-                st.success("Dosyalar sepete eklendi!")
-
-    with tab_manuel:
-        st.markdown("##### 📏 Ölçü Birimi ve Veriler")
-        birim_secimi = st.radio("Birim:", ["mm", "cm", "m"], horizontal=True)
-        
-        with st.form("manuel_form"):
-            c_m1, c_m2, c_m3 = st.columns(3)
-            # value=None yapıyoruz ki kutu BOŞ gelsin, "0.00" silmekle uğraşma
-            m_malz = c_m1.selectbox("Malzeme", list(st.session_state.config['malzemeler'].keys()))
-            m_kal = c_m2.number_input("Kalınlık (mm)", value=None, placeholder="Örn: 2")
-            m_adet = c_m3.number_input("Adet", value=None, min_value=1, placeholder="Örn: 1")
-            
-            c_m4, c_m5, c_m6 = st.columns(3)
-            m_en = c_m4.number_input(f"En ({birim_secimi})", value=None, placeholder="Genişlik")
-            m_boy = c_m5.number_input(f"Boy ({birim_secimi})", value=None, placeholder="Uzunluk")
-            m_sure = c_m6.number_input("Kesim Süresi (dk)", value=None, placeholder="Dakika")
-            
-            m_bukum = st.number_input("Büküm Sayısı (Adet başı)", value=None, placeholder="0")
-            
-            if st.form_submit_button("Listeye Ekle"):
-                # Boş bırakılanları 0 kabul et
-                carpan = 1000 if birim_secimi == "m" else (10 if birim_secimi == "cm" else 1)
-                
-                en_val = float(m_en) if m_en is not None else 0.0
-                boy_val = float(m_boy) if m_boy is not None else 0.0
-                kal_val = float(m_kal) if m_kal is not None else 0.0
-                adet_val = int(m_adet) if m_adet is not None else 1
-                sure_val = float(m_sure) if m_sure is not None else 0.0
-                bukum_val = int(m_bukum) if m_bukum is not None else 0
-                
-                st.session_state.sepet.append({
-                    "Dosya": "Manuel",
-                    "Malzeme": m_malz, 
-                    "K (mm)": kal_val, 
-                    "En (mm)": en_val * carpan, 
-                    "Boy (mm)": boy_val * carpan, 
-                    "Adet": adet_val, 
-                    "Süre (dk)": sure_val, 
-                    "Fire (%)": 0.0,
-                    "Büküm": bukum_val
-                })
+                st.success("Dosyalar eklendi!")
                 st.rerun()
 
-    # SEPET VE HESAPLAMA
+    # SEPET VE HESAP
     st.markdown("### 🛒 Sipariş Listesi")
     
-    if len(st.session_state.sepet) > 0:
+    if st.session_state.sepet:
         df_sepet = pd.DataFrame(st.session_state.sepet)
         
-        # Excel Tarzı Düzenlenebilir Tablo
+        # SİLMEK İÇİN: num_rows="dynamic" en kolay yoldur.
         edited_df = st.data_editor(
             df_sepet,
             column_config={
-                "Malzeme": st.column_config.SelectboxColumn("Malzeme", options=list(st.session_state.config['malzemeler'].keys()), required=True),
+                "Adet": st.column_config.NumberColumn("Adet", min_value=1),
                 "En (mm)": st.column_config.NumberColumn("En", format="%.1f"),
                 "Boy (mm)": st.column_config.NumberColumn("Boy", format="%.1f"),
-                "Adet": st.column_config.NumberColumn("Adet", min_value=1),
-                "Fire (%)": st.column_config.NumberColumn("Fire %", max_value=100)
             },
-            num_rows="dynamic", # SİLME BURADAN YAPILIR
+            num_rows="dynamic",
             use_container_width=True,
-            key="sepet_editor"
+            key="basket_editor"
         )
         
-        # HESAPLA BUTONU
-        if st.button("💰 Hesapla", type="primary"):
-            # ÖNEMLİ: Düzenlenmiş tabloyu (edited_df) sepete geri kaydedelim ki silinenler gitsin
-            st.session_state.sepet = edited_df.to_dict('records')
-            
+        if st.button("💰 FİYATI HESAPLA", type="primary"):
             toplam_tl = 0
             toplam_kg = 0
-            cfg = st.session_state.config
+            guncel_sepet = edited_df.to_dict('records')
+            st.session_state.sepet = guncel_sepet # Hafızayı güncelle
             
-            for row in st.session_state.sepet:
-                malz = cfg['malzemeler'][row["Malzeme"]]
-                ayarlar = cfg['ayarlar']
+            # Veritabanından Malzeme Fiyatlarını Al
+            df_m = st.session_state.malzeme_cache
+            
+            for item in guncel_sepet:
+                # Malzeme Bilgisi
+                m_row = df_m[df_m["Malzeme"] == item["Malzeme"]].iloc[0]
+                m_fiyat = float(m_row["Fiyat"])
+                m_birim = str(m_row["Birim"])
+                m_yog = float(m_row["Yogunluk"])
                 
-                # None kontrolü (Düzenlerken boş bırakılırsa)
-                en = float(row["En (mm)"] or 0)
-                boy = float(row["Boy (mm)"] or 0)
-                kal = float(row["K (mm)"] or 0)
-                adet = int(row["Adet"] or 1)
-                sure = float(row["Süre (dk)"] or 0)
-                bukum = int(row["Büküm"] or 0)
-                fire = float(row["Fire (%)"] or 0)
+                if m_birim == "USD": m_fiyat = m_fiyat * DOLAR
                 
-                hacim = en * boy * kal
-                kg = (hacim * malz["yogunluk"]) / 1_000_000 * adet
+                # Hesap
+                hacim = item["En (mm)"] * item["Boy (mm)"] * item["Kalınlık"]
+                kg = (hacim * m_yog) / 1_000_000 * item["Adet"]
                 
-                fiyat = malz["fiyat"] * ayarlar["dolar_kuru"] if malz["birim"] == "USD" else malz["fiyat"]
-                fire_carpan = 1 / (1 - fire/100) if fire < 100 else 1
-                tutar_malzeme = kg * fiyat * fire_carpan
+                malz_tut = kg * m_fiyat
+                lazer_tut = (item["Süre"] * item["Adet"]) * LAZER_DK
+                bukum_tut = (item["Büküm"] * item["Adet"]) * ABKANT_TL
                 
-                tutar_lazer = (sure * adet) * ayarlar["lazer_dk"]
-                tutar_bukum = (bukum * adet) * ayarlar["abkant_bukum"]
-                
-                toplam_tl += tutar_malzeme + tutar_lazer + tutar_bukum
+                toplam_tl += malz_tut + lazer_tut + bukum_tut
                 toplam_kg += kg
             
             # Kâr ve KDV
-            ayarlar = cfg['ayarlar']
-            kar_tutari = toplam_tl * (ayarlar["kar_orani"] / 100)
-            ara_toplam = toplam_tl + kar_tutari
+            karli = toplam_tl * (1 + KAR/100)
+            kdv = karli * 0.20 if KDV_DURUM == "Evet" else 0
+            genel = karli + kdv
             
-            kdv_tutari = 0
-            if ayarlar["kdv_ekle"]:
-                kdv_tutari = ara_toplam * (ayarlar["kdv_orani"] / 100)
+            st.divider()
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f'<div class="metric-card">Ağırlık<div class="metric-val">{toplam_kg:.2f} kg</div></div>', unsafe_allow_html=True)
+            c2.markdown(f'<div class="metric-card">Maliyet<div class="metric-val">{toplam_tl:.2f} TL</div></div>', unsafe_allow_html=True)
+            kdv_txt = "+ KDV" if KDV_DURUM == "Evet" else "KDV Yok"
+            c3.markdown(f'<div class="metric-card" style="border-left: 5px solid green;">TEKLİF ({kdv_txt})<div class="metric-val">{genel:,.2f} TL</div></div>', unsafe_allow_html=True)
             
-            genel_toplam = ara_toplam + kdv_tutari
-            
-            # SONUÇLAR
-            st.markdown("---")
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">Toplam Ağırlık</div><div class="metric-value">{toplam_kg:.2f} kg</div></div>', unsafe_allow_html=True)
-            with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">Ham Maliyet</div><div class="metric-value">{toplam_tl:.2f} TL</div></div>', unsafe_allow_html=True)
-            with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">Kâr (%{ayarlar["kar_orani"]})</div><div class="metric-value">{kar_tutari:.2f} TL</div></div>', unsafe_allow_html=True)
-            kdv_txt = f"+ KDV %{ayarlar['kdv_orani']}" if ayarlar['kdv_ekle'] else "KDV Dahil Değil"
-            with c4: st.markdown(f'<div class="metric-card" style="border-left: 5px solid #10B981;"><div class="metric-label">TEKLİF ({kdv_txt})</div><div class="metric-value">{genel_toplam:,.2f} TL</div></div>', unsafe_allow_html=True)
-
-            # KAYDET
-            st.markdown("---")
-            is_adi = st.text_input("İş Tanımı / Proje Adı", placeholder="Örn: 2024 Makina Kapakları")
-            if st.button("💾 Müşteriye Kaydet ve Temizle"):
-                if not st.session_state.aktif_musteri:
-                    st.error("Lütfen yukarıdan Müşteri Seçin!")
-                else:
-                    is_kaydet(st.session_state.aktif_musteri, is_adi or "Genel Sipariş", genel_toplam, f"{len(st.session_state.sepet)} kalem, {toplam_kg:.1f}kg")
-                    st.session_state.sepet = []
-                    st.balloons()
-                    st.success("İşlem başarıyla kaydedildi!")
-                    st.rerun()
+            st.divider()
+            notlar = st.text_input("Sipariş Notu", placeholder="Örn: Acil teslim")
+            if st.button("💾 Kaydet"):
+                df_sip = read_csv_from_github("siparisler.csv")
+                yeni_sip = pd.DataFrame([{
+                    "Tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "Müşteri": secilen_firma,
+                    "İş Adı": notlar or "Genel",
+                    "Tutar": round(genel, 2),
+                    "Detay": f"{len(guncel_sepet)} parça, {toplam_kg:.1f}kg"
+                }])
+                df_yen = pd.concat([df_sip, yeni_sip], ignore_index=True)
+                save_csv_to_github("siparisler.csv", df_yen)
+                st.session_state.sepet = []
+                st.balloons()
+                st.success("Sipariş kaydedildi!")
+                st.rerun()
     else:
-        st.info("Sepet boş. Yukarıdan manuel veya dosya ekleyerek başlayın.")
+        st.info("Sepet boş.")
 
-# --- SAYFA 2: MÜŞTERİ VERİTABANI ---
-elif secilen_sayfa == "👥 Müşteri Veritabanı":
-    st.markdown('<div class="main-header">Müşteri Geçmişi</div>', unsafe_allow_html=True)
-    df = musteri_veritabani_yukle()
-    if not df.empty:
-        c1, c2 = st.columns([1, 2])
-        filtre_musteri = c1.selectbox("Müşteri Filtrele", ["Tümü"] + sorted(df["Müşteri"].unique().tolist()))
-        if filtre_musteri != "Tümü": df = df[df["Müşteri"] == filtre_musteri]
+# --- SAYFA 2: MÜŞTERİLER ---
+elif menu == "Müşteri Yönetimi":
+    st.markdown('<p class="main-header">Müşteri Veritabanı</p>', unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste", "➕ Yeni Ekle", "📜 Sipariş Geçmişi"])
+    
+    with tab1:
+        df = read_csv_from_github("musteriler.csv")
         st.dataframe(df, use_container_width=True)
-        if not df.empty:
-            st.info(f"Toplam Ciro: **{df['Tutar'].sum():,.2f} TL**")
-    else:
-        st.warning("Kayıt yok.")
+        
+    with tab2:
+        with st.form("yeni_mus"):
+            firma = st.text_input("Firma Adı")
+            yetkili = st.text_input("Yetkili")
+            tel = st.text_input("Telefon")
+            if st.form_submit_button("Kaydet"):
+                df_mus = read_csv_from_github("musteriler.csv")
+                if firma in df_mus["Firma Adı"].values:
+                    st.error("Bu firma zaten kayıtlı.")
+                else:
+                    yeni = pd.DataFrame([{"Firma Adı": firma, "Yetkili": yetkili, "Telefon": tel}])
+                    save_csv_to_github("musteriler.csv", pd.concat([df_mus, yeni], ignore_index=True))
+                    st.success("Müşteri eklendi!")
+                    st.rerun()
+                    
+    with tab3:
+        df_sip = read_csv_from_github("siparisler.csv")
+        if not df_sip.empty:
+            mus_filter = st.selectbox("Firma Seç", ["Tümü"] + df_sip["Müşteri"].unique().tolist())
+            if mus_filter != "Tümü":
+                df_sip = df_sip[df_sip["Müşteri"] == mus_filter]
+            st.dataframe(df_sip, use_container_width=True)
+        else:
+            st.warning("Sipariş geçmişi yok.")
 
 # --- SAYFA 3: AYARLAR ---
-elif secilen_sayfa == "⚙️ Ayarlar":
-    st.markdown('<div class="main-header">Kalıcı Sistem Ayarları</div>', unsafe_allow_html=True)
+elif menu == "Ayarlar & Malzemeler":
+    st.markdown('<p class="main-header">Ayarlar</p>', unsafe_allow_html=True)
     
-    tab_genel, tab_malz = st.tabs(["⚙️ Genel Ayarlar", "🔩 Malzeme Fiyatları"])
+    tab_gen, tab_malz = st.tabs(["⚙️ Genel", "🔩 Malzemeler"])
     
-    with tab_genel:
+    with tab_gen:
         c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Finansal Ayarlar")
-            # Değerleri session'dan alıp güncelleme
-            yeni_kar = st.number_input("Varsayılan Kâr Oranı (%)", value=st.session_state.config['ayarlar']['kar_orani'])
-            yeni_kdv = st.number_input("KDV Oranı (%)", value=st.session_state.config['ayarlar']['kdv_orani'])
-            yeni_kdv_ekle = st.checkbox("Hesaplamaya KDV Ekle?", value=st.session_state.config['ayarlar']['kdv_ekle'])
+        yd = c1.number_input("Dolar Kuru", value=DOLAR)
+        yk = c2.number_input("Kâr Oranı (%)", value=KAR)
+        yl = c1.number_input("Lazer (TL/dk)", value=LAZER_DK)
+        ya = c2.number_input("Abkant (TL/vuruş)", value=ABKANT_TL)
+        ykdv = st.selectbox("KDV Durumu", ["Evet", "Hayır"], index=0 if KDV_DURUM=="Evet" else 1)
+        
+        if st.button("Ayarları Kaydet"):
+            # Güncelle
+            df_ayar.loc[df_ayar['Ayar']=='dolar_kuru', 'Deger'] = yd
+            df_ayar.loc[df_ayar['Ayar']=='kar_orani', 'Deger'] = yk
+            df_ayar.loc[df_ayar['Ayar']=='lazer_dk', 'Deger'] = yl
+            df_ayar.loc[df_ayar['Ayar']=='abkant_vurus', 'Deger'] = ya
+            df_ayar.loc[df_ayar['Ayar']=='kdv_durum', 'Deger'] = ykdv
+            save_csv_to_github("ayarlar.csv", df_ayar)
+            st.session_state.ayarlar_cache = df_ayar
+            st.success("Ayarlar güncellendi!")
+            st.rerun()
             
-        with c2:
-            st.subheader("İşçilik & Kur")
-            yeni_dolar = st.number_input("Manuel Dolar Kuru (TL)", value=st.session_state.config['ayarlar']['dolar_kuru'])
-            yeni_lazer = st.number_input("Lazer (TL/dk)", value=st.session_state.config['ayarlar']['lazer_dk'])
-            yeni_abkant = st.number_input("Abkant (TL/vuruş)", value=st.session_state.config['ayarlar']['abkant_bukum'])
-
-        if st.button("Genel Ayarları Kaydet (Kalıcı)"):
-            st.session_state.config['ayarlar'].update({
-                "kar_orani": yeni_kar, "kdv_orani": yeni_kdv, "kdv_ekle": yeni_kdv_ekle,
-                "dolar_kuru": yeni_dolar, "lazer_dk": yeni_lazer, "abkant_bukum": yeni_abkant
-            })
-            ayarlari_kaydet(st.session_state.config)
-            st.success("Ayarlar kaydedildi!")
-
     with tab_malz:
-        malz_list = []
-        for k, v in st.session_state.config['malzemeler'].items():
-            row = {"Malzeme": k, "Fiyat": v["fiyat"], "Birim": v["birim"], "Yoğunluk": v["yogunluk"]}
-            malz_list.append(row)
-        
-        df_malz = pd.DataFrame(malz_list)
-        edited_malz = st.data_editor(
-            df_malz,
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "Birim": st.column_config.SelectboxColumn("Birim", options=["USD", "TL"]),
-                "Yoğunluk": st.column_config.NumberColumn("Yoğunluk (g/cm3)", format="%.2f"),
-                "Fiyat": st.column_config.NumberColumn("Birim Fiyat", format="%.2f")
-            }
-        )
-        
-        if st.button("Malzeme Listesini Kaydet (Kalıcı)"):
-            yeni_sozluk = {}
-            for index, row in edited_malz.iterrows():
-                yeni_sozluk[row["Malzeme"]] = {
-                    "fiyat": row["Fiyat"],
-                    "birim": row["Birim"],
-                    "yogunluk": row["Yoğunluk"]
-                }
-            st.session_state.config['malzemeler'] = yeni_sozluk
-            ayarlari_kaydet(st.session_state.config)
-            st.success("Malzeme listesi güncellendi!")
-    
-    st.markdown("---")
-    if st.button("⚠️ FABRİKA AYARLARINA DÖN (RESET)", type="secondary"):
-        if os.path.exists(CONFIG_FILE):
-            os.remove(CONFIG_FILE)
-        del st.session_state.config
-        st.rerun()
+        df_m = st.session_state.malzeme_cache
+        edited_m = st.data_editor(df_m, num_rows="dynamic", use_container_width=True)
+        if st.button("Malzeme Listesini Kaydet"):
+            save_csv_to_github("malzemeler.csv", edited_m)
+            st.session_state.malzeme_cache = edited_m
+            st.success("Malzemeler güncellendi!")
