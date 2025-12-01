@@ -24,15 +24,13 @@ DEFAULT_MALZEME = {
 }
 
 # --- SESSION STATE (HAFIZA) ---
-# Buradaki veriler sayfa yenilense bile silinmez.
 if 'sepet' not in st.session_state: st.session_state.sepet = []
 if 'malzeme_db' not in st.session_state: st.session_state.malzeme_db = DEFAULT_MALZEME
 if 'dolar_kuru' not in st.session_state: st.session_state.dolar_kuru = 34.50
 if 'lazer_dk_ucret' not in st.session_state: st.session_state.lazer_dk_ucret = 20.0
-# Müşteri seçimi hafızası
 if 'aktif_musteri' not in st.session_state: st.session_state.aktif_musteri = None
 
-# Form varsayılanları (Hata almamak için)
+# Form varsayılanları
 defaults = {"x": 0.0, "y": 0.0, "sure": 0.0, "kal": 2.0, "fire": 0.0, "malz": "S235JR (Siyah)"}
 for k, v in defaults.items():
     if f'form_{k}' not in st.session_state: st.session_state[f'form_{k}'] = v
@@ -76,24 +74,20 @@ def sureyi_dakikaya_cevir(zaman_str):
 def regex_taramasi(text):
     veriler = {}
     try:
-        # Süre
         zaman_match = re.search(r'(?:Kesim|Cut|Time|Süre).*?(\d{2}:\d{2}:\d{2})', text, re.IGNORECASE | re.DOTALL)
         if zaman_match: veriler["sure"] = sureyi_dakikaya_cevir(zaman_match.group(1))
         
-        # X ve Y
         x_match = re.search(r'[X]\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         y_match = re.search(r'[Y]\s*[:|]?\s*(\d{3,5}[.,]\d+)', text)
         if x_match: veriler["x"] = float(x_match.group(1).replace(',', '.'))
         if y_match: veriler["y"] = float(y_match.group(1).replace(',', '.'))
         
-        # Kalınlık
         kal_match = re.search(r'3000\s*x\s*1500\s*x\s*(\d+[.,]?\d*)', text)
         if kal_match: veriler["kal"] = float(kal_match.group(1).replace(',', '.'))
         else:
             kal_alt = re.search(r'(?:Kalınlık|Thick|Sac)\s*[:]?\s*(\d+[.,]?\d*)', text, re.IGNORECASE)
             if kal_alt: veriler["kal"] = float(kal_alt.group(1).replace(',', '.'))
 
-        # Malzeme
         tl = text.lower()
         if "dkp" in tl: veriler["malz"] = "DKP"
         elif "galvaniz" in tl: veriler["malz"] = "Galvaniz"
@@ -125,18 +119,16 @@ def resim_oku(image):
         return regex_taramasi(text)
     except: return {}
 
-# --- ARAYÜZ BAŞLIYOR ---
+# --- ARAYÜZ ---
 
 st.title("🏭 Lazer CRM Yönetim Paneli")
 
-# --- BÖLÜM 1: MÜŞTERİ SEÇİMİ ---
-# Müşteri seçimini bir 'Form' içine alarak sayfanın sürekli yenilenmesini engelliyoruz
+# MÜŞTERİ SEÇİMİ
 col_m1, col_m2 = st.columns([3, 1])
 
 with col_m1:
     musteriler = musteri_listesi_getir()
     secenekler = ["➕ Yeni Müşteri Ekle"] + musteriler
-    # Session state kullanarak seçimi koruyoruz
     secim = st.selectbox("Müşteri Seçimi", secenekler)
 
 with col_m2:
@@ -148,29 +140,24 @@ with col_m2:
         st.session_state.aktif_musteri = secim
         st.success(f"**{st.session_state.aktif_musteri}**")
 
-# Müşteri seçilmediyse dur
 if not st.session_state.aktif_musteri:
     st.info("Lütfen işlem yapmak için yukarıdan bir müşteri seçin.")
     st.stop()
 
 st.divider()
 
-# --- BÖLÜM 2: İŞLEM ALANI ---
+# SEKMELER
 tab_is, tab_gecmis, tab_ayar = st.tabs(["🛒 Yeni Teklif", "🗂️ Müşteri Geçmişi", "⚙️ Ayarlar"])
 
 # --- TAB 1: YENİ İŞ ---
 with tab_is:
     col_sol, col_sag = st.columns([1, 1.3])
     
-    # SOL: DOSYA YÜKLEME VE FORM
     with col_sol:
         st.markdown("#### 1. Veri Girişi")
-        # Dosya Yükleyici
         uploaded_file = st.file_uploader("Dosya Yükle (Word/Resim)", type=['docx', 'jpg', 'png', 'jpeg'])
         
-        # Dosya Analizi (Sadece dosya değişirse çalışır)
         if uploaded_file:
-            # Dosya ID'sini kontrol et, aynı dosyayı tekrar tekrar okuma
             if "last_file" not in st.session_state or st.session_state.last_file != uploaded_file.name:
                 vals = {}
                 if uploaded_file.name.endswith('.docx'):
@@ -180,20 +167,15 @@ with tab_is:
                     vals = resim_oku(Image.open(uploaded_file))
                     st.toast("Resim okundu.", icon="📸")
                 
-                # Form verilerini güncelle
                 if vals:
                     for k in ['x', 'y', 'sure', 'kal', 'malz']:
                         if k in vals and vals[k] != 0:
                             st.session_state[f'form_{k}'] = vals[k]
-                
                 st.session_state.last_file = uploaded_file.name
 
-        # FORM (Manuel düzenleme için)
         with st.form("veri_formu"):
             c1, c2 = st.columns(2)
-            # Malzeme index hatasını önle
-            try:
-                m_index = list(st.session_state.malzeme_db.keys()).index(st.session_state.form_malz)
+            try: m_index = list(st.session_state.malzeme_db.keys()).index(st.session_state.form_malz)
             except: m_index = 0
             
             f_malz = c1.selectbox("Malzeme", list(st.session_state.malzeme_db.keys()), index=m_index)
@@ -201,7 +183,8 @@ with tab_is:
             
             c3, c4 = st.columns(2)
             f_birim = c3.radio("Birim", ["mm", "cm", "m"], horizontal=True)
-            f_adet = c4.number_input("Plaka Adeti", 1, min_value=1)
+            # DÜZELTİLEN SATIR BURASI: value=1 olarak belirtildi
+            f_adet = c4.number_input("Plaka Adeti", value=1, min_value=1)
             
             c5, c6 = st.columns(2)
             f_x = c5.number_input("X Boyutu", value=float(st.session_state.form_x))
@@ -211,7 +194,6 @@ with tab_is:
             f_sure = c7.number_input("Süre (dk)", value=float(st.session_state.form_sure))
             f_fire = c8.number_input("Fire (%)", value=0.0)
             
-            # Ekle Butonu
             if st.form_submit_button("Sepete Ekle ⬇️", type="primary", use_container_width=True):
                 carpan = 1000 if f_birim == "m" else (10 if f_birim == "cm" else 1)
                 st.session_state.sepet.append({
@@ -220,12 +202,10 @@ with tab_is:
                 })
                 st.rerun()
 
-    # SAĞ: HESAPLAMA VE SEPET
     with col_sag:
         st.markdown(f"#### 2. Sepet ({len(st.session_state.sepet)} Parça)")
         
         if st.session_state.sepet:
-            # Sepeti Göster
             df_sepet = pd.DataFrame(st.session_state.sepet)
             st.dataframe(df_sepet[["Malzeme", "K", "Adet", "Süre"]], use_container_width=True, height=150)
             
@@ -233,21 +213,15 @@ with tab_is:
                 st.session_state.sepet = []
                 st.rerun()
             
-            # HESAP MOTORU
             top_tl = 0
             top_kg = 0
             
             for p in st.session_state.sepet:
                 info = st.session_state.malzeme_db[p["Malzeme"]]
-                
-                # Ağırlık
                 hacim = p["X"] * p["Y"] * p["K"]
                 kg = (hacim * info["yogunluk"]) / 1_000_000 * p["Adet"]
                 
-                # Fiyat
                 fiyat = info["fiyat"] * st.session_state.dolar_kuru if info["birim"] == "USD" else info["fiyat"]
-                
-                # Fire
                 fire_kat = 1 / (1 - p["Fire"]/100) if p["Fire"] < 100 else 1
                 
                 malz_tut = kg * fiyat * fire_kat
@@ -261,7 +235,6 @@ with tab_is:
             c1.metric("Toplam Ağırlık", f"{top_kg:.2f} kg")
             c2.metric("Maliyet", f"{top_tl:.2f} TL")
             
-            # SATIŞ
             st.markdown("#### 💰 Satış Fiyatı")
             kc1, kc2 = st.columns(2)
             kar = kc1.number_input("Kâr (%)", 25, step=5)
@@ -270,14 +243,13 @@ with tab_is:
             teklif = (top_tl * (1 + kar/100)) + ekstra
             st.success(f"### TEKLİF: {teklif:,.2f} TL")
             
-            # KAYDET
             is_adi = st.text_input("İş Tanımı", placeholder="Örn: Flanş Kesimi")
             if st.button("💾 Kaydet", type="primary", use_container_width=True):
                 kayit_ekle(st.session_state.aktif_musteri, is_adi or "Genel", teklif, f"{len(st.session_state.sepet)} parça")
                 st.session_state.sepet = []
                 st.success("Kayıt Başarılı!")
         else:
-            st.info("Sepet boş. Yandaki formdan ürün ekleyin.")
+            st.info("Sepet boş.")
 
 # --- TAB 2: GEÇMİŞ ---
 with tab_gecmis:
@@ -285,16 +257,14 @@ with tab_gecmis:
     if os.path.exists("musteri_gecmisi.csv"):
         try:
             df_all = pd.read_csv("musteri_gecmisi.csv")
-            # Sadece aktif müşteriyi filtrele
             df_mus = df_all[df_all["Müşteri"] == st.session_state.aktif_musteri]
-            
             if not df_mus.empty:
                 st.dataframe(df_mus, use_container_width=True)
                 toplam = df_mus["Tutar (TL)"].sum()
                 st.info(f"Toplam İş Hacmi: **{toplam:,.2f} TL**")
             else:
                 st.warning("Bu müşteriye ait kayıt bulunamadı.")
-        except: st.error("Veritabanı hatası.")
+        except: st.error("Veritabanı okunamadı.")
     else:
         st.warning("Kayıt yok.")
 
