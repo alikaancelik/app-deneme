@@ -241,7 +241,7 @@ if menu == "Hesaplama":
     if not df_mus.empty and "Firma" in df_mus.columns:
         kayitli_list = df_mus["Firma"].tolist()
     
-    secim_tipi = st.radio("İşlem Türü:", ["⚡ Hızlı (Yeni/Kayıtsız)", "📂 Kayıtlı Müşteri"], horizontal=True)
+    secim_tipi = st.radio("İşlem Türü:", ["⚡ Hızlı (Yeni/Kayıtsız)", "📂 Kayıtlı Müşteri (calısmıyor)"], horizontal=True)
     
     aktif_musteri = ""
     
